@@ -4,6 +4,7 @@ from core.georgia_counties import GEORGIA_COUNTIES
 from core.queries import RecentCountyQueries
 from gui.widgets.styled_combo_box import StyledComboBox
 
+
 class CountyComboWidget(StyledComboBox):
     SEPARATOR = "─" * 30
     NA_VALUE = "N/A (No pending court case)"
@@ -15,7 +16,6 @@ class CountyComboWidget(StyledComboBox):
 
     def refresh_items(self):
         self.clear()
-
         model = QStandardItemModel()
 
         na_item = QStandardItem(self.NA_VALUE)
