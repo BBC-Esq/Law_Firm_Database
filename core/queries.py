@@ -1,291 +1,434 @@
-from core.database import Database
-from core.models import Client, Judge, CourtStaff, Case, BillingEntry, OpposingAttorney, OpposingStaff, Payment
-from typing import List, Optional, TypeVar, Generic, Type
-from dataclasses import fields
-from datetime import date
-
-T = TypeVar('T')
-
-class BaseQueries(Generic[T]):
-    table_name: str = ""
-    model_class: Type[T] = None
-    order_by: str = "id"
-
-    def __init__(self, db: Database):
-        self.db = db
-
-    def _get_field_names(self) -> List[str]:
-        excluded = {'id', 'created_at'}
-        return [f.name for f in fields(self.model_class) if f.name not in excluded]
-
-    def _get_field_values(self, entity: T) -> tuple:
-        field_names = self._get_field_names()
-        return tuple(getattr(entity, f) for f in field_names)
-
-    def create(self, entity: T) -> int:
-        field_names = self._get_field_names()
-        placeholders = ', '.join(['?'] * len(field_names))
-        columns = ', '.join(field_names)
-        values = self._get_field_values(entity)
-        cursor = self.db.execute(
-            f"INSERT INTO {self.table_name} ({columns}) VALUES ({placeholders})",
-            values
-        )
-        return cursor.lastrowid
-
-    def update(self, entity: T):
-        field_names = self._get_field_names()
-        set_clause = ', '.join(f"{f}=?" for f in field_names)
-        values = self._get_field_values(entity) + (entity.id,)
-        self.db.execute(
-            f"UPDATE {self.table_name} SET {set_clause} WHERE id=?",
-            values
-        )
-
-    def delete(self, entity_id: int):
-        self.db.execute(f"DELETE FROM {self.table_name} WHERE id=?", (entity_id,))
-
-    def get_all(self) -> List[T]:
-        rows = self.db.fetchall(f"SELECT * FROM {self.table_name} ORDER BY {self.order_by}")
-        return [self.model_class(**dict(row)) for row in rows]
-
-    def get_by_id(self, entity_id: int) -> Optional[T]:
-        row = self.db.fetchone(f"SELECT * FROM {self.table_name} WHERE id=?", (entity_id,))
-        return self.model_class(**dict(row)) if row else None
+from core.base_queries import BaseQueries
+from core.models import Person, Case, CasePerson, BillingEntry, Payment
+from typing import List
 
 
-class ClientQueries(BaseQueries[Client]):
-    table_name = "clients"
-    model_class = Client
+PERSON_COLUMNS = """
+    id, first_name, last_name, middle_name, phone, email, address,
+    billing_rate_cents, firm_name, job_title, created_at
+"""
+
+CASE_COLUMNS = "id, case_number, case_name, is_litigation, court_type, county, status, billing_rate_cents, created_at"
+
+CASE_PERSON_COLUMNS = "id, case_id, person_id, role, party_designation, represents_person_id, is_pro_se, created_at"
+
+BILLING_COLUMNS = "id, case_id, entry_date, hours, is_expense, amount_cents, description, created_at"
+
+PAYMENT_COLUMNS = "id, person_id, case_id, payment_date, amount_cents, expense_amount_cents, payment_method, reference_number, notes, created_at"
+
+
+class PersonQueries(BaseQueries[Person]):
+    table_name = "people"
+    model_class = Person
+    columns = PERSON_COLUMNS
     order_by = "last_name, first_name"
 
-    def search(self, query: str) -> List[Client]:
-        rows = self.db.fetchall(
-            """SELECT * FROM clients 
-               WHERE first_name LIKE ? OR last_name LIKE ? OR middle_name LIKE ?
-               ORDER BY last_name, first_name LIMIT 20""",
-            (f"%{query}%", f"%{query}%", f"%{query}%")
-        )
-        return [Client(**dict(row)) for row in rows]
+    def create(self, person: Person) -> int:
+        cursor = self.db.execute("""
+            INSERT INTO people (
+                first_name, last_name, middle_name,
+                phone, email, address, billing_rate_cents, firm_name, job_title
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            person.first_name, person.last_name, person.middle_name,
+            person.phone, person.email, person.address,
+            person.billing_rate_cents, person.firm_name, person.job_title
+        ))
+        return cursor.lastrowid
 
+    def update(self, person: Person):
+        self.db.execute("""
+            UPDATE people SET
+                first_name=?, last_name=?, middle_name=?,
+                phone=?, email=?, address=?, billing_rate_cents=?, firm_name=?, job_title=?
+            WHERE id=?
+        """, (
+            person.first_name, person.last_name, person.middle_name,
+            person.phone, person.email, person.address,
+            person.billing_rate_cents, person.firm_name, person.job_title,
+            person.id
+        ))
 
-class JudgeQueries(BaseQueries[Judge]):
-    table_name = "judges"
-    model_class = Judge
-    order_by = "name"
+    def find_duplicates(self, first_name: str, last_name: str) -> List[Person]:
+        rows = self.db.fetchall(f"""
+            SELECT {PERSON_COLUMNS} FROM people 
+            WHERE LOWER(first_name) = LOWER(?) AND LOWER(last_name) = LOWER(?)
+            ORDER BY last_name, first_name
+        """, (first_name, last_name))
+        return [Person(**dict(row)) for row in rows]
 
-    def get_staff_count(self, judge_id: int) -> int:
-        row = self.db.fetchone(
-            "SELECT COUNT(*) as count FROM court_staff WHERE judge_id = ?",
-            (judge_id,)
-        )
-        return row["count"] if row else 0
-
-
-class CourtStaffQueries(BaseQueries[CourtStaff]):
-    table_name = "court_staff"
-    model_class = CourtStaff
-    order_by = "name"
-
-    def get_by_judge(self, judge_id: int) -> List[CourtStaff]:
-        rows = self.db.fetchall(
-            "SELECT * FROM court_staff WHERE judge_id=? ORDER BY job_title, name",
-            (judge_id,)
-        )
-        return [CourtStaff(**dict(row)) for row in rows]
-
-    def get_general_staff(self) -> List[CourtStaff]:
-        rows = self.db.fetchall(
-            "SELECT * FROM court_staff WHERE judge_id IS NULL ORDER BY job_title, name"
-        )
-        return [CourtStaff(**dict(row)) for row in rows]
-
-    def get_by_parent(self, parent_id: int) -> List[CourtStaff]:
-        return self.get_by_judge(parent_id)
-
-
-class OpposingAttorneyQueries(BaseQueries[OpposingAttorney]):
-    table_name = "opposing_attorneys"
-    model_class = OpposingAttorney
-    order_by = "name"
-
-
-class OpposingStaffQueries(BaseQueries[OpposingStaff]):
-    table_name = "opposing_staff"
-    model_class = OpposingStaff
-    order_by = "name"
-
-    def get_by_attorney(self, attorney_id: int) -> List[OpposingStaff]:
-        rows = self.db.fetchall(
-            "SELECT * FROM opposing_staff WHERE attorney_id=? ORDER BY job_title, name",
-            (attorney_id,)
-        )
-        return [OpposingStaff(**dict(row)) for row in rows]
-
-    def get_by_parent(self, parent_id: int) -> List[OpposingStaff]:
-        return self.get_by_attorney(parent_id)
+    def get_all_clients(self) -> List[Person]:
+        rows = self.db.fetchall(f"""
+            SELECT DISTINCT p.id, p.first_name, p.last_name, p.middle_name, p.phone, p.email, 
+                   p.address, p.billing_rate_cents, p.firm_name, p.job_title, p.created_at
+            FROM people p
+            JOIN case_people cp ON p.id = cp.person_id
+            WHERE cp.role = 'client'
+            ORDER BY p.last_name, p.first_name
+        """)
+        return [Person(**dict(row)) for row in rows]
 
 
 class CaseQueries(BaseQueries[Case]):
     table_name = "cases"
     model_class = Case
+    columns = CASE_COLUMNS
     order_by = "created_at DESC"
 
-    def get_all(self) -> List[dict]:
+    def generate_matter_number(self, last_name: str) -> str:
+        clean_name = "".join(c for c in last_name if c.isalnum())
+        if not clean_name:
+            clean_name = "Matter"
+
         rows = self.db.fetchall("""
-            SELECT c.*, 
-                   cl.first_name || ' ' || cl.last_name as client_name,
-                   j.name as judge_name, 
-                   oa.name as opposing_attorney_name
+            SELECT case_name FROM cases 
+            WHERE case_name LIKE ?
+            ORDER BY case_name
+        """, (f"{clean_name}-%",))
+
+        existing_numbers = []
+        for row in rows:
+            case_name = row["case_name"]
+            if "-" in case_name:
+                try:
+                    num_part = case_name.split("-")[-1]
+                    existing_numbers.append(int(num_part))
+                except ValueError:
+                    pass
+
+        next_number = 1
+        if existing_numbers:
+            next_number = max(existing_numbers) + 1
+
+        return f"{clean_name}-{next_number:03d}"
+
+    def create(self, case: Case) -> int:
+        cursor = self.db.execute("""
+            INSERT INTO cases (case_number, case_name, is_litigation, court_type, county, status, billing_rate_cents)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (case.case_number, case.case_name, case.is_litigation, case.court_type, case.county, case.status, case.billing_rate_cents))
+        return cursor.lastrowid
+
+    def create_with_client(self, case: Case, client_id: int, party_designation: str = None) -> int:
+        case_id = self.create(case)
+
+        self.db.execute("""
+            INSERT INTO case_people (case_id, person_id, role, party_designation)
+            VALUES (?, ?, 'client', ?)
+        """, (case_id, client_id, party_designation))
+
+        return case_id
+
+    def update(self, case: Case):
+        self.db.execute("""
+            UPDATE cases SET case_number=?, case_name=?, is_litigation=?, court_type=?, county=?, status=?, billing_rate_cents=?
+            WHERE id=?
+        """, (case.case_number, case.case_name, case.is_litigation, case.court_type, case.county, case.status, case.billing_rate_cents, case.id))
+
+    def get_all_with_client(self) -> List[dict]:
+        rows = self.db.fetchall("""
+            SELECT c.id, c.case_number, c.case_name, c.is_litigation, c.court_type, c.county, 
+                   c.status, c.billing_rate_cents, c.created_at,
+                   p.first_name || ' ' || p.last_name as client_name,
+                   p.id as client_id
             FROM cases c
-            LEFT JOIN clients cl ON c.client_id = cl.id
-            LEFT JOIN judges j ON c.judge_id = j.id
-            LEFT JOIN opposing_attorneys oa ON c.opposing_attorney_id = oa.id
+            LEFT JOIN case_people cp ON c.id = cp.case_id AND cp.role = 'client'
+            LEFT JOIN people p ON cp.person_id = p.id
             ORDER BY c.created_at DESC
         """)
         return [dict(row) for row in rows]
 
     def get_by_client(self, client_id: int) -> List[dict]:
         rows = self.db.fetchall("""
-            SELECT c.*, 
-                   cl.first_name || ' ' || cl.last_name as client_name,
-                   j.name as judge_name, 
-                   oa.name as opposing_attorney_name
+            SELECT c.id, c.case_number, c.case_name, c.is_litigation, c.court_type, c.county,
+                   c.status, c.billing_rate_cents, c.created_at,
+                   p.first_name || ' ' || p.last_name as client_name
             FROM cases c
-            LEFT JOIN clients cl ON c.client_id = cl.id
-            LEFT JOIN judges j ON c.judge_id = j.id
-            LEFT JOIN opposing_attorneys oa ON c.opposing_attorney_id = oa.id
-            WHERE c.client_id = ?
+            JOIN case_people cp ON c.id = cp.case_id AND cp.role = 'client'
+            JOIN people p ON cp.person_id = p.id
+            WHERE p.id = ?
             ORDER BY c.created_at DESC
         """, (client_id,))
         return [dict(row) for row in rows]
 
-    def get_by_parent(self, parent_id: int) -> List[dict]:
-        return self.get_by_client(parent_id)
-
-    def search_matters(self, query: str) -> List[dict]:
+    def get_cases_for_person(self, person_id: int) -> List[dict]:
         rows = self.db.fetchall("""
-            SELECT c.id, c.case_number, c.case_name, c.court_type, c.county,
-                   cl.first_name || ' ' || cl.last_name as client_name, 
-                   cl.billing_rate_cents
+            SELECT c.id, c.case_number, c.case_name, c.is_litigation, c.court_type, c.county,
+                   c.status, c.billing_rate_cents, c.created_at,
+                   GROUP_CONCAT(DISTINCT cp.role) as roles,
+                   client.first_name || ' ' || client.last_name as client_name
             FROM cases c
-            JOIN clients cl ON c.client_id = cl.id
-            WHERE cl.first_name LIKE ? OR cl.last_name LIKE ? OR c.case_number LIKE ? OR c.case_name LIKE ?
-            ORDER BY cl.last_name, cl.first_name
-            LIMIT 20
-        """, (f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%"))
+            JOIN case_people cp ON c.id = cp.case_id
+            LEFT JOIN case_people client_cp ON c.id = client_cp.case_id AND client_cp.role = 'client'
+            LEFT JOIN people client ON client_cp.person_id = client.id
+            WHERE cp.person_id = ?
+            GROUP BY c.id
+            ORDER BY c.created_at DESC
+        """, (person_id,))
         return [dict(row) for row in rows]
 
-    def get_matter_by_id(self, case_id: int) -> Optional[dict]:
-        row = self.db.fetchone("""
-            SELECT c.id, c.case_number, c.case_name, c.court_type, c.county,
-                   cl.first_name || ' ' || cl.last_name as client_name, 
-                   cl.billing_rate_cents
-            FROM cases c
-            JOIN clients cl ON c.client_id = cl.id
-            WHERE c.id = ?
-        """, (case_id,))
-        return dict(row) if row else None
 
+class CasePersonQueries(BaseQueries[CasePerson]):
+    table_name = "case_people"
+    model_class = CasePerson
+    columns = CASE_PERSON_COLUMNS
+    order_by = "id"
+
+    def add_person_to_case(self, case_person: CasePerson) -> int:
+        cursor = self.db.execute("""
+            INSERT INTO case_people (case_id, person_id, role, party_designation, represents_person_id, is_pro_se)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            case_person.case_id, case_person.person_id, case_person.role,
+            case_person.party_designation, case_person.represents_person_id, case_person.is_pro_se
+        ))
+        return cursor.lastrowid
+
+    def remove_person_from_case(self, case_person_id: int):
+        self.delete(case_person_id)
+
+    def get_people_for_case(self, case_id: int) -> List[dict]:
+        rows = self.db.fetchall("""
+            SELECT cp.id, cp.case_id, cp.person_id, cp.role, cp.party_designation, 
+                   cp.represents_person_id, cp.is_pro_se, cp.created_at,
+                   p.first_name, p.last_name, p.middle_name,
+                   p.phone, p.email, p.address, p.firm_name, p.job_title,
+                   rep.first_name || ' ' || rep.last_name as represents_name
+            FROM case_people cp
+            JOIN people p ON cp.person_id = p.id
+            LEFT JOIN people rep ON cp.represents_person_id = rep.id
+            WHERE cp.case_id = ?
+            ORDER BY 
+                CASE cp.role
+                    WHEN 'client' THEN 1
+                    WHEN 'co_counsel' THEN 2
+                    WHEN 'opposing_party' THEN 3
+                    WHEN 'opposing_counsel' THEN 4
+                    WHEN 'opposing_staff' THEN 5
+                    WHEN 'judge' THEN 6
+                    WHEN 'judge_staff' THEN 7
+                    WHEN 'court_staff' THEN 8
+                    WHEN 'guardian_ad_litem' THEN 9
+                    ELSE 10
+                END,
+                p.last_name, p.first_name
+        """, (case_id,))
+        return [dict(row) for row in rows]
+
+    def update_client(self, case_id: int, new_client_id: int, party_designation: str = None):
+        self.db.execute(
+            "DELETE FROM case_people WHERE case_id = ? AND role = 'client'",
+            (case_id,)
+        )
+        self.db.execute("""
+            INSERT INTO case_people (case_id, person_id, role, party_designation)
+            VALUES (?, ?, 'client', ?)
+        """, (case_id, new_client_id, party_designation))
+
+    def update_client_designation(self, case_id: int, party_designation: str):
+        self.db.execute("""
+            UPDATE case_people 
+            SET party_designation = ?
+            WHERE case_id = ? AND role = 'client'
+        """, (party_designation, case_id))
+
+    def get_by_role(self, case_id: int, role: str) -> List[dict]:
+        rows = self.db.fetchall("""
+            SELECT cp.id, cp.case_id, cp.person_id, cp.role, cp.party_designation,
+                   cp.represents_person_id, cp.is_pro_se, cp.created_at,
+                   p.first_name, p.last_name, p.middle_name,
+                   p.phone, p.email, p.firm_name, p.job_title,
+                   rep.first_name || ' ' || rep.last_name as represents_name
+            FROM case_people cp
+            JOIN people p ON cp.person_id = p.id
+            LEFT JOIN people rep ON cp.represents_person_id = rep.id
+            WHERE cp.case_id = ? AND cp.role = ?
+            ORDER BY p.last_name, p.first_name
+        """, (case_id, role))
+        return [dict(row) for row in rows]
+
+    def get_case_summary(self, case_id: int) -> dict:
+        all_people = self.get_people_for_case(case_id)
+
+        summary = {
+            'client': None,
+            'co_counsel': [],
+            'judge': None,
+            'judge_staff': [],
+            'court_staff': [],
+            'opposing_parties': [],
+            'guardian_ad_litem': None
+        }
+
+        opposing_parties = {}
+        attorney_to_party = {}
+
+        for person in all_people:
+            role = person['role']
+
+            if role == 'client':
+                summary['client'] = person
+            elif role == 'co_counsel':
+                summary['co_counsel'].append(person)
+            elif role == 'judge':
+                summary['judge'] = person
+            elif role == 'judge_staff':
+                summary['judge_staff'].append(person)
+            elif role == 'court_staff':
+                summary['court_staff'].append(person)
+            elif role == 'opposing_party':
+                opposing_parties[person['person_id']] = {
+                    'party': person,
+                    'attorneys': [],
+                    'staff': []
+                }
+            elif role == 'opposing_counsel':
+                rep_id = person['represents_person_id']
+                if rep_id in opposing_parties:
+                    opposing_parties[rep_id]['attorneys'].append(person)
+                    attorney_to_party[person['person_id']] = rep_id
+            elif role == 'opposing_staff':
+                attorney_id = person['represents_person_id']
+                party_id = attorney_to_party.get(attorney_id)
+                if party_id and party_id in opposing_parties:
+                    opposing_parties[party_id]['staff'].append(person)
+            elif role == 'guardian_ad_litem':
+                summary['guardian_ad_litem'] = person
+
+        summary['opposing_parties'] = list(opposing_parties.values())
+
+        return summary
+
+    def clear_pro_se_for_party(self, case_id: int, person_id: int):
+        self.db.execute("""
+            UPDATE case_people 
+            SET is_pro_se = 0
+            WHERE case_id = ? AND person_id = ? AND role = 'opposing_party'
+        """, (case_id, person_id))
 
 class BillingQueries(BaseQueries[BillingEntry]):
     table_name = "billing_entries"
     model_class = BillingEntry
+    columns = BILLING_COLUMNS
     order_by = "entry_date DESC"
+
+    def create(self, entry: BillingEntry) -> int:
+        cursor = self.db.execute("""
+            INSERT INTO billing_entries (case_id, entry_date, hours, is_expense, amount_cents, description)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            entry.case_id, 
+            entry.entry_date, 
+            entry.hours, 
+            1 if entry.is_expense else 0, 
+            entry.amount_cents, 
+            entry.description
+        ))
+        return cursor.lastrowid
+
+    def update(self, entry: BillingEntry):
+        self.db.execute("""
+            UPDATE billing_entries SET case_id=?, entry_date=?, hours=?, is_expense=?, amount_cents=?, description=?
+            WHERE id=?
+        """, (
+            entry.case_id, 
+            entry.entry_date, 
+            entry.hours, 
+            1 if entry.is_expense else 0, 
+            entry.amount_cents, 
+            entry.description, 
+            entry.id
+        ))
 
     def get_by_case(self, case_id: int) -> List[dict]:
         rows = self.db.fetchall("""
-            SELECT be.*, c.case_number, c.case_name,
-                   cl.first_name || ' ' || cl.last_name as client_name, 
-                   cl.billing_rate_cents
+            SELECT be.*,
+                   c.case_number, c.case_name,
+                   c.billing_rate_cents,
+                   p.first_name || ' ' || p.last_name as client_name
             FROM billing_entries be
             JOIN cases c ON be.case_id = c.id
-            JOIN clients cl ON c.client_id = cl.id
+            LEFT JOIN case_people cp ON c.id = cp.case_id AND cp.role = 'client'
+            LEFT JOIN people p ON cp.person_id = p.id
             WHERE be.case_id = ?
             ORDER BY be.entry_date DESC
         """, (case_id,))
         return [dict(row) for row in rows]
 
-    def get_all_with_details(self) -> List[dict]:
-        rows = self.db.fetchall("""
-            SELECT be.*, c.case_number, c.case_name, 
-                   cl.first_name || ' ' || cl.last_name as client_name, 
-                   cl.billing_rate_cents
-            FROM billing_entries be
-            JOIN cases c ON be.case_id = c.id
-            JOIN clients cl ON c.client_id = cl.id
-            ORDER BY be.entry_date DESC
-        """)
-        return [dict(row) for row in rows]
-
-    def get_client_totals(self, client_id: int) -> dict:
-        row = self.db.fetchone("""
-            SELECT 
-                COALESCE(SUM(be.hours), 0) as total_hours,
-                COALESCE(SUM(be.hours * cl.billing_rate_cents), 0) as total_amount_cents
-            FROM billing_entries be
-            JOIN cases c ON be.case_id = c.id
-            JOIN clients cl ON c.client_id = cl.id
-            WHERE cl.id = ?
-        """, (client_id,))
-        return dict(row) if row else {"total_hours": 0, "total_amount_cents": 0}
-
     def get_case_totals(self, case_id: int) -> dict:
         row = self.db.fetchone("""
             SELECT 
-                COALESCE(SUM(be.hours), 0) as total_hours,
-                COALESCE(SUM(be.hours * cl.billing_rate_cents), 0) as total_amount_cents
+                COALESCE(SUM(CASE WHEN is_expense = 0 THEN hours ELSE 0 END), 0) as total_hours,
+                COALESCE(SUM(CASE WHEN is_expense = 0 THEN hours * c.billing_rate_cents ELSE 0 END), 0) as total_time_cents,
+                COALESCE(SUM(CASE WHEN is_expense = 1 THEN amount_cents ELSE 0 END), 0) as total_expense_cents
             FROM billing_entries be
             JOIN cases c ON be.case_id = c.id
-            JOIN clients cl ON c.client_id = cl.id
-            WHERE c.id = ?
+            WHERE be.case_id = ?
         """, (case_id,))
-        return dict(row) if row else {"total_hours": 0, "total_amount_cents": 0}
+        result = dict(row) if row else {"total_hours": 0, "total_time_cents": 0, "total_expense_cents": 0}
+        result["total_amount_cents"] = result["total_time_cents"] + result["total_expense_cents"]
+        return result
 
 
 class PaymentQueries(BaseQueries[Payment]):
     table_name = "payments"
     model_class = Payment
+    columns = PAYMENT_COLUMNS
     order_by = "payment_date DESC"
 
-    def get_all_with_details(self) -> List[dict]:
+    def create(self, payment: Payment) -> int:
+        cursor = self.db.execute("""
+            INSERT INTO payments (person_id, case_id, payment_date, amount_cents, 
+                                  expense_amount_cents, payment_method, reference_number, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            payment.person_id, payment.case_id, payment.payment_date,
+            payment.amount_cents, payment.expense_amount_cents, 
+            payment.payment_method, payment.reference_number, payment.notes
+        ))
+        return cursor.lastrowid
+
+    def update(self, payment: Payment):
+        self.db.execute("""
+            UPDATE payments SET 
+                person_id=?, case_id=?, payment_date=?, amount_cents=?,
+                expense_amount_cents=?, payment_method=?, reference_number=?, notes=?
+            WHERE id=?
+        """, (
+            payment.person_id, payment.case_id, payment.payment_date,
+            payment.amount_cents, payment.expense_amount_cents,
+            payment.payment_method, payment.reference_number,
+            payment.notes, payment.id
+        ))
+
+    def get_by_case(self, case_id: int) -> List[dict]:
         rows = self.db.fetchall("""
-            SELECT p.*, 
-                   cl.first_name || ' ' || cl.last_name as client_name, 
+            SELECT p.*,
+                   per.first_name || ' ' || per.last_name as client_name,
                    c.case_number
             FROM payments p
-            JOIN clients cl ON p.client_id = cl.id
+            JOIN people per ON p.person_id = per.id
             LEFT JOIN cases c ON p.case_id = c.id
+            WHERE p.case_id = ?
             ORDER BY p.payment_date DESC
-        """)
+        """, (case_id,))
         return [dict(row) for row in rows]
 
-    def get_by_client(self, client_id: int) -> List[dict]:
-        rows = self.db.fetchall("""
-            SELECT p.*, 
-                   cl.first_name || ' ' || cl.last_name as client_name, 
-                   c.case_number
-            FROM payments p
-            JOIN clients cl ON p.client_id = cl.id
-            LEFT JOIN cases c ON p.case_id = c.id
-            WHERE p.client_id = ?
-            ORDER BY p.payment_date DESC
-        """, (client_id,))
-        return [dict(row) for row in rows]
-
-    def get_by_parent(self, parent_id: int) -> List[dict]:
-        return self.get_by_client(parent_id)
-    
-    def get_client_total_cents(self, client_id: int) -> int:
-        row = self.db.fetchone(
-            "SELECT COALESCE(SUM(amount_cents), 0) as total FROM payments WHERE client_id = ?",
-            (client_id,)
-        )
-        return row["total"] if row else 0
+    def get_case_payment_totals(self, case_id: int) -> dict:
+        row = self.db.fetchone("""
+            SELECT 
+                COALESCE(SUM(amount_cents), 0) as total_fee_payments_cents,
+                COALESCE(SUM(expense_amount_cents), 0) as total_expense_payments_cents
+            FROM payments
+            WHERE case_id = ?
+        """, (case_id,))
+        result = dict(row) if row else {"total_fee_payments_cents": 0, "total_expense_payments_cents": 0}
+        result["total_payments_cents"] = result["total_fee_payments_cents"] + result["total_expense_payments_cents"]
+        return result
 
 
 class RecentCountyQueries:
-    def __init__(self, db: Database):
+    def __init__(self, db):
         self.db = db
 
     def add_recent(self, county_name: str):

@@ -1,11 +1,13 @@
 import re
 from PySide6.QtWidgets import QMessageBox, QLineEdit
 
+
 def validate_email(email: str) -> bool:
     if not email:
         return True
     pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     return re.match(pattern, email.strip()) is not None
+
 
 def validate_phone(phone: str) -> bool:
     if not phone:
@@ -13,21 +15,6 @@ def validate_phone(phone: str) -> bool:
     digits = re.sub(r'\D', '', phone)
     return 7 <= len(digits) <= 15
 
-def validate_email_field(email_edit: QLineEdit, parent) -> bool:
-    email_text = email_edit.text().strip()
-    if email_text and not validate_email(email_text):
-        QMessageBox.warning(parent, "Validation Error", f"Invalid email format: {email_text}")
-        email_edit.setFocus()
-        return False
-    return True
-
-def validate_phone_field(phone_edit: QLineEdit, parent) -> bool:
-    phone_text = phone_edit.text().strip()
-    if phone_text and not validate_phone(phone_text):
-        QMessageBox.warning(parent, "Validation Error", f"Invalid phone format: {phone_text}\nPhone should contain 7-15 digits.")
-        phone_edit.setFocus()
-        return False
-    return True
 
 def validate_required_field(field: QLineEdit, field_name: str, parent) -> bool:
     if not field.text().strip():
@@ -35,6 +22,7 @@ def validate_required_field(field: QLineEdit, field_name: str, parent) -> bool:
         field.setFocus()
         return False
     return True
+
 
 def validate_multi_email_field(email_edit: QLineEdit, parent) -> bool:
     email_text = email_edit.text().strip()
@@ -46,6 +34,7 @@ def validate_multi_email_field(email_edit: QLineEdit, parent) -> bool:
                 email_edit.setFocus()
                 return False
     return True
+
 
 def validate_multi_phone_field(phone_edit: QLineEdit, parent) -> bool:
     phone_text = phone_edit.text().strip()
