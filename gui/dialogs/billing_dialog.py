@@ -18,11 +18,11 @@ class BillingDialog(QDialog):
         self.entry = entry
         self.case_id = case_id
         self.billing_rate_cents = billing_rate_cents
-        
+
         self.setWindowTitle("Edit Billing Entry" if entry else "Add Billing Entry")
         self.setMinimumWidth(400)
         self.setup_ui()
-        
+
         if entry:
             self.load_entry()
 
@@ -41,7 +41,7 @@ class BillingDialog(QDialog):
 
         self.hours_label = QLabel("Hours:")
         self.hours_spin = QDoubleSpinBox()
-        self.hours_spin.setRange(0.1, 24.0)
+        self.hours_spin.setRange(0.0, 24.0)
         self.hours_spin.setSingleStep(0.1)
         self.hours_spin.setDecimals(1)
         self.hours_spin.setValue(0.5)
@@ -103,7 +103,7 @@ class BillingDialog(QDialog):
                 self.entry.entry_date.month,
                 self.entry.entry_date.day
             ))
-        
+
         if self.entry.is_expense:
             self.expense_checkbox.setChecked(True)
             if self.entry.amount_cents:
@@ -112,7 +112,7 @@ class BillingDialog(QDialog):
             self.expense_checkbox.setChecked(False)
             if self.entry.hours:
                 self.hours_spin.setValue(self.entry.hours)
-        
+
         self.description_edit.setText(self.entry.description or "")
 
     def validate_and_accept(self):
@@ -122,26 +122,26 @@ class BillingDialog(QDialog):
                 self.amount_spin.setFocus()
                 return
         else:
-            if self.hours_spin.value() <= 0:
-                QMessageBox.warning(self, "Validation Error", "Please enter hours greater than zero.")
+            if self.hours_spin.value() < 0:
+                QMessageBox.warning(self, "Validation Error", "Please enter hours zero or greater.")
                 self.hours_spin.setFocus()
                 return
-        
+
         self.accept()
 
     def get_entry(self) -> BillingEntry:
         qdate = self.date_edit.date()
         entry_date = date(qdate.year(), qdate.month(), qdate.day())
-        
+
         is_expense = self.expense_checkbox.isChecked()
-        
+
         if is_expense:
             hours = None
             amount_cents = int(round(self.amount_spin.value() * 100))
         else:
             hours = self.hours_spin.value()
             amount_cents = None
-        
+
         return BillingEntry(
             case_id=self.case_id,
             entry_date=entry_date,
