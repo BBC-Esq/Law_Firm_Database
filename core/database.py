@@ -86,9 +86,9 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 case_id INTEGER NOT NULL,
                 entry_date DATE NOT NULL,
-                hours REAL CHECK(hours > 0 OR hours IS NULL),
+                hours REAL CHECK(hours >= 0 OR hours IS NULL),
                 is_expense INTEGER DEFAULT 0,
-                amount_cents INTEGER CHECK(amount_cents > 0 OR amount_cents IS NULL),
+                amount_cents INTEGER CHECK(amount_cents >= 0 OR amount_cents IS NULL),
                 description TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (case_id) REFERENCES cases(id) ON DELETE CASCADE
