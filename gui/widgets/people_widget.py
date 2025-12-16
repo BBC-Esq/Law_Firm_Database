@@ -26,12 +26,6 @@ class PeopleWidget(BaseTableWidget):
     def get_add_button_text(self) -> str:
         return "Add Person"
 
-    def get_edit_button_text(self) -> str:
-        return "Edit Person"
-
-    def get_delete_button_text(self) -> str:
-        return "Delete Person"
-
     def setup_ui(self):
         layout = QVBoxLayout(self)
 
@@ -41,9 +35,6 @@ class PeopleWidget(BaseTableWidget):
         list_layout = QVBoxLayout(list_widget)
 
         list_layout.addLayout(self.create_button_row())
-
-        self.edit_btn.setEnabled(False)
-        self.delete_btn.setEnabled(False)
 
         self.table = self.create_table()
         self.table.itemSelectionChanged.connect(self.on_person_selected)
@@ -63,6 +54,7 @@ class PeopleWidget(BaseTableWidget):
         self.cases_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.cases_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.cases_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.cases_table.setAlternatingRowColors(True)
         cases_layout.addWidget(self.cases_table)
 
         self.cases_count_label = QLabel("Select a person to view their cases")
@@ -87,11 +79,6 @@ class PeopleWidget(BaseTableWidget):
 
     def on_person_selected(self):
         person_id = self.get_selected_id()
-
-        has_selection = person_id is not None
-        self.edit_btn.setEnabled(has_selection)
-        self.delete_btn.setEnabled(has_selection)
-
         if person_id:
             self.load_person_cases(person_id)
         else:
@@ -106,7 +93,7 @@ class PeopleWidget(BaseTableWidget):
         for row, case_data in enumerate(cases):
             self.cases_table.setItem(row, 0, QTableWidgetItem(case_data.get('case_number') or ''))
             self.cases_table.setItem(row, 1, QTableWidgetItem(case_data.get('case_name') or ''))
-            
+
             roles_str = case_data.get('roles') or ''
             roles_display = ", ".join(
                 ROLE_DISPLAY_NAMES.get(r.strip(), r.strip()) 
@@ -134,7 +121,6 @@ class PeopleWidget(BaseTableWidget):
     def edit_item(self):
         person_id = self.get_selected_id()
         if not person_id:
-            self.show_select_warning("person", "edit")
             return
 
         person = self.person_queries.get_by_id(person_id)
@@ -146,25 +132,24 @@ class PeopleWidget(BaseTableWidget):
                 self.person_queries.update(updated_person)
                 self.refresh()
 
-    def get_empty_message(self) -> str:
-        return "No people found. Click 'Add Person' to create one."
-
     def delete_item(self):
         person_id = self.get_selected_id()
         if not person_id:
-            self.show_select_warning("person", "delete")
             return
+
+        person = self.person_queries.get_by_id(person_id)
+        person_name = person.display_name if person else "this person"
 
         cases = self.case_queries.get_cases_for_person(person_id)
 
         if cases:
             confirmed = self.confirm_delete(
-                f"This person is involved in {len(cases)} case(s).\n\n"
+                f"'{person_name}' is involved in {len(cases)} case(s).\n\n"
                 "Deleting them will remove them from all cases.\n"
                 "Are you sure you want to delete this person?"
             )
         else:
-            confirmed = self.confirm_delete("Are you sure you want to delete this person?")
+            confirmed = self.confirm_delete(f"Are you sure you want to delete '{person_name}'?")
 
         if confirmed:
             self.person_queries.delete(person_id)

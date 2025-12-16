@@ -3,6 +3,13 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QLabel
 )
 from PySide6.QtCore import Qt
+from gui.utils import show_table_context_menu
+
+
+class TooltipTableWidgetItem(QTableWidgetItem):
+    def __init__(self, text: str):
+        super().__init__(text)
+        self.setToolTip(text)
 
 
 def configure_standard_table(table: QTableWidget, headers: list, hide_id_column: bool = True):
@@ -15,8 +22,9 @@ def configure_standard_table(table: QTableWidget, headers: list, hide_id_column:
     if hide_id_column and len(headers) > 0:
         table.setColumnHidden(0, True)
     table.setSortingEnabled(True)
-    table.setWordWrap(True)
     table.setAlternatingRowColors(True)
+    table.setContextMenuPolicy(Qt.CustomContextMenu)
+
 
 def get_selected_row_id(table: QTableWidget, id_column: int = 0):
     selected = table.selectedItems()
@@ -35,8 +43,9 @@ def populate_table_rows(table: QTableWidget, data: list, row_formatter):
     for row, item in enumerate(data):
         values = row_formatter(item)
         for col, value in enumerate(values):
-            table.setItem(row, col, QTableWidgetItem(str(value) if value is not None else ""))
-    
+            text = str(value) if value is not None else ""
+            table.setItem(row, col, TooltipTableWidgetItem(text))
+
     table.setSortingEnabled(True)
 
 
@@ -48,14 +57,13 @@ class BaseTableWidget(QWidget):
         self.table = None
         self.count_label = None
         self.add_btn = None
-        self.edit_btn = None
-        self.delete_btn = None
         self.refresh_btn = None
 
     def create_table(self) -> QTableWidget:
         table = QTableWidget()
         configure_standard_table(table, self.column_headers)
         table.doubleClicked.connect(self.edit_item)
+        table.customContextMenuRequested.connect(self.show_context_menu)
         return table
 
     def create_button_row(self) -> QHBoxLayout:
@@ -64,14 +72,6 @@ class BaseTableWidget(QWidget):
         self.add_btn = QPushButton(self.get_add_button_text())
         self.add_btn.clicked.connect(self.add_item)
         layout.addWidget(self.add_btn)
-
-        self.edit_btn = QPushButton(self.get_edit_button_text())
-        self.edit_btn.clicked.connect(self.edit_item)
-        layout.addWidget(self.edit_btn)
-
-        self.delete_btn = QPushButton(self.get_delete_button_text())
-        self.delete_btn.clicked.connect(self.delete_item)
-        layout.addWidget(self.delete_btn)
 
         layout.addStretch()
 
@@ -84,12 +84,6 @@ class BaseTableWidget(QWidget):
     def get_add_button_text(self) -> str:
         return "Add"
 
-    def get_edit_button_text(self) -> str:
-        return "Edit"
-
-    def get_delete_button_text(self) -> str:
-        return "Delete"
-
     def get_selected_id(self):
         if self.table:
             return get_selected_row_id(self.table)
@@ -101,16 +95,17 @@ class BaseTableWidget(QWidget):
             if self.count_label:
                 self.count_label.setText(f"Total: {len(data)}")
 
-            if len(data) == 0:
-                self.table.setRowCount(1)
-                placeholder = QTableWidgetItem(self.get_empty_message())
-                placeholder.setFlags(Qt.NoItemFlags)
-                placeholder.setForeground(Qt.gray)
-                self.table.setItem(0, 1, placeholder)
-                self.table.setSpan(0, 1, 1, len(self.column_headers) - 1)
+    def show_context_menu(self, position):
+        show_table_context_menu(
+            self.table,
+            position,
+            edit_callback=self.edit_item,
+            delete_callback=self.delete_item,
+            extra_actions=self.get_extra_context_actions()
+        )
 
-    def get_empty_message(self) -> str:
-        return "No items found. Click 'Add' to create one."
+    def get_extra_context_actions(self) -> list:
+        return None
 
     def row_to_values(self, item) -> list:
         raise NotImplementedError("Subclasses must implement row_to_values")

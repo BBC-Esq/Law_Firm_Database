@@ -3,15 +3,19 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QMessageBox, QLabel, QGroupBox
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QBrush
 from core.queries import CaseQueries, PersonQueries, CasePersonQueries, RecentCountyQueries
 from gui.dialogs.case_dialog import CaseDialog
 from gui.widgets.case_detail_widget import CaseDetailWidget
 from gui.widgets.styled_combo_box import StyledComboBox
-from gui.widgets.base_table_widget import configure_standard_table, get_selected_row_id
+from gui.widgets.base_table_widget import configure_standard_table, get_selected_row_id, TooltipTableWidgetItem
+from gui.utils import show_table_context_menu
 
 
 class CaseWidget(QWidget):
+
     column_headers = ["ID", "Matter #", "Client", "Status", "Litigation", "Case Number", "Court", "County", "Rate"]
+
     def __init__(self, case_queries: CaseQueries, person_queries: PersonQueries,
                  case_person_queries: CasePersonQueries, recent_county_queries: RecentCountyQueries):
         super().__init__()
@@ -19,7 +23,7 @@ class CaseWidget(QWidget):
         self.person_queries = person_queries
         self.case_person_queries = case_person_queries
         self.recent_county_queries = recent_county_queries
-        
+
         self.setup_ui()
         self.refresh()
 
@@ -47,16 +51,6 @@ class CaseWidget(QWidget):
         self.add_btn.clicked.connect(self.add_case)
         button_layout.addWidget(self.add_btn)
 
-        self.edit_btn = QPushButton("Edit Matter")
-        self.edit_btn.setEnabled(False)
-        self.edit_btn.clicked.connect(self.edit_case)
-        button_layout.addWidget(self.edit_btn)
-
-        self.delete_btn = QPushButton("Delete Matter")
-        self.delete_btn.setEnabled(False)
-        self.delete_btn.clicked.connect(self.delete_case)
-        button_layout.addWidget(self.delete_btn)
-
         button_layout.addStretch()
 
         self.refresh_btn = QPushButton("Refresh")
@@ -69,6 +63,7 @@ class CaseWidget(QWidget):
         configure_standard_table(self.table, self.column_headers)
         self.table.itemSelectionChanged.connect(self.on_case_selected)
         self.table.doubleClicked.connect(self.edit_case)
+        self.table.customContextMenuRequested.connect(self.show_context_menu)
         list_layout.addWidget(self.table)
 
         self.count_label = QLabel()
@@ -96,16 +91,47 @@ class CaseWidget(QWidget):
 
         layout.addWidget(splitter)
 
+    def show_context_menu(self, position):
+        case_id = self.get_selected_case_id()
+        if not case_id:
+            return
+
+        case = self.case_queries.get_by_id(case_id)
+        if not case:
+            return
+
+        extra_actions = []
+        if case.status == "Open":
+            extra_actions.append(("Mark as Closed", lambda: self.set_case_status(case_id, "Closed")))
+        else:
+            extra_actions.append(("Reopen Matter", lambda: self.set_case_status(case_id, "Open")))
+
+        show_table_context_menu(
+            self.table,
+            position,
+            edit_callback=self.edit_case,
+            delete_callback=self.delete_case,
+            extra_actions=extra_actions
+        )
+
+    def set_case_status(self, case_id: int, status: str):
+        case = self.case_queries.get_by_id(case_id)
+        if case:
+            case.status = status
+            self.case_queries.update(case)
+            self.refresh()
+            self.select_case(case_id)
+
     def load_matter_combo(self, cases: list):
         self.matter_combo.blockSignals(True)
         self.matter_combo.clear()
         self.matter_combo.addItem("-- Select a Matter --", None)
-        
+
         for case_data in cases:
             matter_name = case_data.get('case_name') or ''
             case_id = case_data.get('id')
             self.matter_combo.addItem(matter_name, case_id)
-        
+
         self.matter_combo.blockSignals(False)
 
     def on_combo_matter_selected(self, index):
@@ -114,7 +140,7 @@ class CaseWidget(QWidget):
             self.table.clearSelection()
             self.detail_widget.set_case(None)
             return
-        
+
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 0)
             if item and int(item.text()) == case_id:
@@ -126,25 +152,34 @@ class CaseWidget(QWidget):
         self.table.setRowCount(len(cases))
 
         for row, case_data in enumerate(cases):
-            self.table.setItem(row, 0, QTableWidgetItem(str(case_data.get('id', ''))))
-            self.table.setItem(row, 1, QTableWidgetItem(case_data.get('case_name') or ''))
-            self.table.setItem(row, 2, QTableWidgetItem(case_data.get('client_name') or 'No Client'))
-            self.table.setItem(row, 3, QTableWidgetItem(case_data.get('status') or 'Open'))
+            status = case_data.get('status') or 'Open'
+            is_closed = status == 'Closed'
             
+            self.table.setItem(row, 0, TooltipTableWidgetItem(str(case_data.get('id', ''))))
+            self.table.setItem(row, 1, TooltipTableWidgetItem(case_data.get('case_name') or ''))
+            self.table.setItem(row, 2, TooltipTableWidgetItem(case_data.get('client_name') or 'No Client'))
+            self.table.setItem(row, 3, TooltipTableWidgetItem(status))
+
             is_litigation = case_data.get('is_litigation')
             litigation_display = "Yes" if is_litigation else "No"
-            self.table.setItem(row, 4, QTableWidgetItem(litigation_display))
-            
-            self.table.setItem(row, 5, QTableWidgetItem(case_data.get('case_number') or ''))
-            self.table.setItem(row, 6, QTableWidgetItem(case_data.get('court_type') or ''))
-            
+            self.table.setItem(row, 4, TooltipTableWidgetItem(litigation_display))
+
+            self.table.setItem(row, 5, TooltipTableWidgetItem(case_data.get('case_number') or ''))
+            self.table.setItem(row, 6, TooltipTableWidgetItem(case_data.get('court_type') or ''))
+
             county = case_data.get('county')
             county_display = f"{county} County" if county else ''
-            self.table.setItem(row, 7, QTableWidgetItem(county_display))
-            
+            self.table.setItem(row, 7, TooltipTableWidgetItem(county_display))
+
             rate_cents = case_data.get('billing_rate_cents') or 0
             rate_display = f"${rate_cents / 100:.2f}/hr"
-            self.table.setItem(row, 8, QTableWidgetItem(rate_display))
+            self.table.setItem(row, 8, TooltipTableWidgetItem(rate_display))
+
+            if is_closed:
+                for col in range(self.table.columnCount()):
+                    item = self.table.item(row, col)
+                    if item:
+                        item.setForeground(QBrush(QColor("#888888")))
 
         self.table.setSortingEnabled(True)
         self.count_label.setText(f"Total Matters: {len(cases)}")
@@ -155,10 +190,6 @@ class CaseWidget(QWidget):
     def on_case_selected(self):
         case_id = self.get_selected_case_id()
         self.detail_widget.set_case(case_id)
-
-        has_selection = case_id is not None
-        self.edit_btn.setEnabled(has_selection)
-        self.delete_btn.setEnabled(has_selection)
 
         if case_id:
             self.matter_combo.blockSignals(True)
@@ -186,14 +217,14 @@ class CaseWidget(QWidget):
             if item and int(item.text()) == case_id:
                 self.table.selectRow(row)
                 break
-        
+
         self.matter_combo.blockSignals(True)
         for i in range(self.matter_combo.count()):
             if self.matter_combo.itemData(i) == case_id:
                 self.matter_combo.setCurrentIndex(i)
                 break
         self.matter_combo.blockSignals(False)
-        
+
         self.detail_widget.set_case(case_id)
 
     def add_case(self):
@@ -207,12 +238,12 @@ class CaseWidget(QWidget):
             case = dialog.get_case()
             client = dialog.get_client()
             party_designation = dialog.get_party_designation()
-            
+
             if dialog.is_creating_new_client():
                 client_id = self.person_queries.create(client)
             else:
                 client_id = client.id
-            
+
             case_id = self.case_queries.create_with_client(case, client_id, party_designation)
             self.refresh()
             self.select_case(case_id)
@@ -220,7 +251,6 @@ class CaseWidget(QWidget):
     def edit_case(self):
         case_id = self.get_selected_case_id()
         if not case_id:
-            QMessageBox.warning(self, "Warning", "Please select a matter to edit.")
             return
 
         case = self.case_queries.get_by_id(case_id)
@@ -229,7 +259,7 @@ class CaseWidget(QWidget):
             client_party_designation = None
             if client_info:
                 client_party_designation = client_info[0].get('party_designation')
-            
+
             dialog = CaseDialog(
                 parent=self, 
                 case_queries=self.case_queries,
@@ -245,19 +275,21 @@ class CaseWidget(QWidget):
                 
                 new_party_designation = dialog.get_party_designation()
                 self.case_person_queries.update_client_designation(case_id, new_party_designation)
-                
+
                 self.refresh()
                 self.select_case(case_id)
 
     def delete_case(self):
         case_id = self.get_selected_case_id()
         if not case_id:
-            QMessageBox.warning(self, "Warning", "Please select a matter to delete.")
             return
+
+        case = self.case_queries.get_by_id(case_id)
+        case_name = case.case_name if case else "this matter"
 
         reply = QMessageBox.question(
             self, "Confirm Delete",
-            "Are you sure you want to delete this matter?\n\n"
+            f"Are you sure you want to delete '{case_name}'?\n\n"
             "This will also delete all billing entries and payment associations for this matter.",
             QMessageBox.Yes | QMessageBox.No
         )
