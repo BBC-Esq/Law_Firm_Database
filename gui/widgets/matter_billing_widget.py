@@ -259,11 +259,20 @@ class MatterBillingWidget(QWidget):
         for matter in matters:
             client_name = matter.get('client_name') or 'No Client'
             matter_name = matter.get('case_name') or ''
-            case_number = matter.get('case_number') or ''
 
-            display = f"{client_name} - {matter_name}"
-            if case_number:
-                display += f" ({case_number})"
+            if matter.get('is_litigation'):
+                county = matter.get('county') or ''
+                court_type = matter.get('court_type') or ''
+                case_number = matter.get('case_number') or ''
+                
+                court_display = f"{county} County {court_type}" if county and court_type else (court_type or county or 'Litigation')
+                
+                if case_number:
+                    display = f"{client_name} - {matter_name} - {court_display} ({case_number})"
+                else:
+                    display = f"{client_name} - {matter_name} - {court_display}"
+            else:
+                display = f"{client_name} - {matter_name} - Non-Litigation"
 
             self.matter_combo.addItem(display, matter)
 

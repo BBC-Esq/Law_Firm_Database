@@ -130,7 +130,22 @@ class CaseWidget(QWidget):
         for case_data in cases:
             matter_name = case_data.get('case_name') or ''
             case_id = case_data.get('id')
-            self.matter_combo.addItem(matter_name, case_id)
+            
+            if case_data.get('is_litigation'):
+                county = case_data.get('county') or ''
+                court_type = case_data.get('court_type') or ''
+                case_number = case_data.get('case_number') or ''
+                
+                court_display = f"{county} County {court_type}" if county and court_type else (court_type or county or 'Litigation')
+                
+                if case_number:
+                    display = f"{matter_name} - {court_display} ({case_number})"
+                else:
+                    display = f"{matter_name} - {court_display}"
+            else:
+                display = f"{matter_name} - Non-Litigation"
+            
+            self.matter_combo.addItem(display, case_id)
 
         self.matter_combo.blockSignals(False)
 
