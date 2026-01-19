@@ -24,37 +24,12 @@ A clean, intuitive desktop application for solo practitioners and small law firm
 
 ### Option 1: Run from Source
 
-```bash
-# Clone the repository
-
-# Install dependencies
+```
 pip install PySide6
-
-# Run the application
+```
+```
 python main.py
 ```
-
----
-
-## 📖 Quick Start
-
-1. **Add a client** — Go to the Clients tab and click "Add Client." Enter contact details and set the hourly billing rate.
-
-2. **Create a case** — In the Cases/Matters tab, click "Add Case/Matter." Select the client, add case details, and optionally assign a judge and opposing counsel.
-
-3. **Log time** — Switch to the Billing tab and click "Add Billing Entry." Search for the client/matter, enter hours and a description.
-
-4. **Record payments** — In the Payments tab, click "Add Payment" to record client payments against specific cases or as general retainer payments.
-
-5. **Manage court contacts** — Use the Court tab to add judges and their staff. The Opposing Counsel tab tracks attorneys you encounter on cases.
-
----
-
-## 🎨 Interface
-
-The application uses a tabbed interface with six main sections: Clients, Cases/Matters, Court, Opposing Counsel, Billing, and Payments. Tables support sorting by any column, and double-clicking any row opens it for editing.
-
----
 
 ## 💾 Data Storage
 
