@@ -2,9 +2,6 @@
 
 A clean, intuitive desktop application for solo practitioners and small law firms to manage clients, cases, and billing.
 
-<img width="898" height="618" alt="image" src="https://github.com/user-attachments/assets/c19a6f01-26b0-4c74-ab2d-257a192562a7" />
-
-
 ---
 
 ## ✨ Features
