@@ -1,8 +1,8 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QSplitter,
-    QTableWidget, QMessageBox, QLabel, QGroupBox
+    QTableWidget, QMessageBox, QLabel, QGroupBox, QCheckBox
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QBrush
 from core.queries import CaseQueries, PersonQueries, CasePersonQueries, RecentCountyQueries
 from core.utils import format_matter_display
@@ -16,6 +16,7 @@ from gui.utils import show_table_context_menu, load_combo_with_items
 class CaseWidget(QWidget):
 
     column_headers = ["ID", "Matter #", "Client", "Status", "Litigation", "Case Number", "Court", "County", "Rate"]
+    show_closed_changed = Signal(bool)
 
     def __init__(self, case_queries: CaseQueries, person_queries: PersonQueries,
                  case_person_queries: CasePersonQueries, recent_county_queries: RecentCountyQueries):
@@ -51,6 +52,11 @@ class CaseWidget(QWidget):
         self.add_btn = QPushButton("Create Matter")
         self.add_btn.clicked.connect(self.add_case)
         button_layout.addWidget(self.add_btn)
+
+        self.show_closed_checkbox = QCheckBox("Show Closed Matters")
+        self.show_closed_checkbox.setChecked(False)
+        self.show_closed_checkbox.stateChanged.connect(self.on_show_closed_changed)
+        button_layout.addWidget(self.show_closed_checkbox)
 
         button_layout.addStretch()
 
@@ -92,6 +98,13 @@ class CaseWidget(QWidget):
 
         layout.addWidget(splitter)
 
+    def get_show_closed(self) -> bool:
+        return self.show_closed_checkbox.isChecked()
+
+    def on_show_closed_changed(self, state):
+        self.refresh()
+        self.show_closed_changed.emit(self.show_closed_checkbox.isChecked())
+
     def show_context_menu(self, position):
         case_id = self.get_selected_case_id()
         if not case_id:
@@ -121,7 +134,11 @@ class CaseWidget(QWidget):
             case.status = status
             self.case_queries.update(case)
             self.refresh()
-            self.select_case(case_id)
+            if status == "Open" or self.show_closed_checkbox.isChecked():
+                self.select_case(case_id)
+            else:
+                self.detail_widget.set_case(None)
+            self.show_closed_changed.emit(self.show_closed_checkbox.isChecked())
 
     def load_matter_combo(self, cases: list):
         def formatter(case_data):
@@ -204,8 +221,9 @@ class CaseWidget(QWidget):
 
     def refresh(self):
         selected_id = self.get_selected_case_id()
+        include_closed = self.show_closed_checkbox.isChecked()
         
-        cases = self.case_queries.get_all_with_client()
+        cases = self.case_queries.get_all_with_client(include_closed=include_closed)
         self.populate_table(cases)
         self.load_matter_combo(cases)
 
@@ -248,6 +266,7 @@ class CaseWidget(QWidget):
             case_id = self.case_queries.create_with_client(case, client_id, party_designation)
             self.refresh()
             self.select_case(case_id)
+            self.show_closed_changed.emit(self.show_closed_checkbox.isChecked())
 
     def edit_case(self):
         case_id = self.get_selected_case_id()
@@ -279,6 +298,7 @@ class CaseWidget(QWidget):
 
                 self.refresh()
                 self.select_case(case_id)
+                self.show_closed_changed.emit(self.show_closed_checkbox.isChecked())
 
     def delete_case(self):
         case_id = self.get_selected_case_id()
@@ -299,3 +319,4 @@ class CaseWidget(QWidget):
             self.case_queries.delete(case_id)
             self.detail_widget.set_case(None)
             self.refresh()
+            self.show_closed_changed.emit(self.show_closed_checkbox.isChecked())

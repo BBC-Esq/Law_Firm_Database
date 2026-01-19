@@ -22,13 +22,14 @@ class MatterBillingWidget(QWidget):
 
     def __init__(self, billing_queries: BillingQueries, payment_queries: PaymentQueries,
                  case_queries: CaseQueries, person_queries: PersonQueries,
-                 case_person_queries: CasePersonQueries):
+                 case_person_queries: CasePersonQueries, get_show_closed_callback=None):
         super().__init__()
         self.billing_queries = billing_queries
         self.payment_queries = payment_queries
         self.case_queries = case_queries
         self.person_queries = person_queries
         self.case_person_queries = case_person_queries
+        self.get_show_closed = get_show_closed_callback or (lambda: True)
         self.selected_client_id = None
         self.selected_matter = None
         self.billing_rate_cents = 0
@@ -37,7 +38,6 @@ class MatterBillingWidget(QWidget):
         self.update_grand_totals()
 
     def _create_balance_display(self, layout, label_text, is_large=False):
-        """Create a label pair for balance display."""
         layout.addWidget(QLabel(f"{label_text}:"))
         value_label = QLabel("$0.00" if ":" not in label_text else "--")
         style = "font-weight: bold;"
@@ -194,7 +194,8 @@ class MatterBillingWidget(QWidget):
             self._refresh_after_change()
 
     def load_matters_combo(self):
-        matters = self.case_queries.get_all_with_client()
+        include_closed = self.get_show_closed()
+        matters = self.case_queries.get_all_with_client(include_closed=include_closed)
         load_combo_with_items(
             self.matter_combo, matters,
             lambda m: (format_matter_display(m, include_client=True), m),
@@ -206,7 +207,8 @@ class MatterBillingWidget(QWidget):
         self.add_payment_btn.setEnabled(enabled)
 
     def _calculate_all_balances(self):
-        matters = self.case_queries.get_all_with_client()
+        include_closed = self.get_show_closed()
+        matters = self.case_queries.get_all_with_client(include_closed=include_closed)
         total_fees, total_expenses = 0, 0
 
         for matter in matters:
@@ -432,3 +434,7 @@ class MatterBillingWidget(QWidget):
                 if matter and matter.get("id") == current_id:
                     self.matter_combo.setCurrentIndex(i)
                     break
+            else:
+                self.on_matter_selected(0)
+        else:
+            self.on_matter_selected(0)

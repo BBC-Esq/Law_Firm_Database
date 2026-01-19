@@ -1,6 +1,7 @@
 from core.base_queries import BaseQueries
 from core.models import Person, Case, CasePerson, BillingEntry, Payment
 from typing import List
+import calendar
 
 
 PERSON_COLUMNS = """
@@ -68,6 +69,20 @@ class PersonQueries(BaseQueries[Person]):
         """)
         return [Person(**dict(row)) for row in rows]
 
+    def get_phone_contacts(self) -> List[dict]:
+        rows = self.db.fetchall("""
+            SELECT 
+                p.phone,
+                p.first_name,
+                p.last_name,
+                GROUP_CONCAT(DISTINCT cp.role) as roles
+            FROM people p
+            LEFT JOIN case_people cp ON p.id = cp.person_id
+            WHERE p.phone IS NOT NULL AND p.phone != ''
+            GROUP BY p.id
+        """)
+        return [dict(row) for row in rows]
+
 
 class CaseQueries(BaseQueries[Case]):
     table_name = "cases"
@@ -125,17 +140,75 @@ class CaseQueries(BaseQueries[Case]):
             WHERE id=?
         """, (case.case_number, case.case_name, case.is_litigation, case.court_type, case.county, case.status, case.billing_rate_cents, case.id))
 
-    def get_all_with_client(self) -> List[dict]:
+    def get_all_with_client(self, include_closed: bool = True) -> List[dict]:
+        if include_closed:
+            query = """
+                SELECT c.id, c.case_number, c.case_name, c.is_litigation, c.court_type, c.county, 
+                       c.status, c.billing_rate_cents, c.created_at,
+                       p.first_name || ' ' || p.last_name as client_name,
+                       p.id as client_id
+                FROM cases c
+                LEFT JOIN case_people cp ON c.id = cp.case_id AND cp.role = 'client'
+                LEFT JOIN people p ON cp.person_id = p.id
+                ORDER BY c.created_at DESC
+            """
+            rows = self.db.fetchall(query)
+        else:
+            query = """
+                SELECT c.id, c.case_number, c.case_name, c.is_litigation, c.court_type, c.county, 
+                       c.status, c.billing_rate_cents, c.created_at,
+                       p.first_name || ' ' || p.last_name as client_name,
+                       p.id as client_id
+                FROM cases c
+                LEFT JOIN case_people cp ON c.id = cp.case_id AND cp.role = 'client'
+                LEFT JOIN people p ON cp.person_id = p.id
+                WHERE c.status = 'Open'
+                ORDER BY c.created_at DESC
+            """
+            rows = self.db.fetchall(query)
+        return [dict(row) for row in rows]
+
+    def get_open_matters_with_client(self) -> List[dict]:
         rows = self.db.fetchall("""
-            SELECT c.id, c.case_number, c.case_name, c.is_litigation, c.court_type, c.county, 
-                   c.status, c.billing_rate_cents, c.created_at,
-                   p.first_name || ' ' || p.last_name as client_name,
-                   p.id as client_id
+            SELECT c.id, c.case_number, c.case_name, c.is_litigation, c.court_type, 
+                   c.county, c.status, c.billing_rate_cents,
+                   p.first_name || ' ' || p.last_name as client_name
             FROM cases c
             LEFT JOIN case_people cp ON c.id = cp.case_id AND cp.role = 'client'
             LEFT JOIN people p ON cp.person_id = p.id
+            WHERE c.status = 'Open'
             ORDER BY c.created_at DESC
         """)
+        return [dict(row) for row in rows]
+
+    def get_matters_for_invoice(self, include_closed: bool = True) -> List[dict]:
+        if include_closed:
+            query = """
+                SELECT c.id, c.case_name, c.case_number, c.billing_rate_cents,
+                       c.is_litigation, c.court_type, c.county, c.status,
+                       p.first_name, p.last_name, p.address, p.email,
+                       p.id as client_id,
+                       p.first_name || ' ' || p.last_name as client_name
+                FROM cases c
+                LEFT JOIN case_people cp ON c.id = cp.case_id AND cp.role = 'client'
+                LEFT JOIN people p ON cp.person_id = p.id
+                ORDER BY c.case_name
+            """
+            rows = self.db.fetchall(query)
+        else:
+            query = """
+                SELECT c.id, c.case_name, c.case_number, c.billing_rate_cents,
+                       c.is_litigation, c.court_type, c.county, c.status,
+                       p.first_name, p.last_name, p.address, p.email,
+                       p.id as client_id,
+                       p.first_name || ' ' || p.last_name as client_name
+                FROM cases c
+                LEFT JOIN case_people cp ON c.id = cp.case_id AND cp.role = 'client'
+                LEFT JOIN people p ON cp.person_id = p.id
+                WHERE c.status = 'Open'
+                ORDER BY c.case_name
+            """
+            rows = self.db.fetchall(query)
         return [dict(row) for row in rows]
 
     def get_by_client(self, client_id: int) -> List[dict]:
@@ -337,6 +410,24 @@ class BillingQueries(BaseQueries[BillingEntry]):
         ))
         return cursor.lastrowid
 
+    def create_from_dict(self, entry_data: dict) -> int:
+        case_id = entry_data['case_id']
+        entry_date = entry_data['entry_date']
+        sort_order = self.get_next_sort_order(case_id, entry_date)
+        cursor = self.db.execute("""
+            INSERT INTO billing_entries (case_id, entry_date, hours, is_expense, amount_cents, description, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            case_id,
+            entry_date,
+            entry_data.get('hours'),
+            entry_data.get('is_expense', 0),
+            entry_data.get('amount_cents'),
+            entry_data.get('description', ''),
+            sort_order
+        ))
+        return cursor.lastrowid
+
     def update(self, entry: BillingEntry):
         existing = self.get_by_id(entry.id)
         if existing and existing.entry_date != entry.entry_date:
@@ -371,6 +462,20 @@ class BillingQueries(BaseQueries[BillingEntry]):
             WHERE be.case_id = ?
             ORDER BY be.entry_date DESC, be.sort_order ASC
         """, (case_id,))
+        return [dict(row) for row in rows]
+
+    def get_entries_for_period(self, case_id: int, year: int, month: int) -> List[dict]:
+        start_date = f"{year}-{month:02d}-01"
+        if month == 12:
+            end_date = f"{year + 1}-01-01"
+        else:
+            end_date = f"{year}-{month + 1:02d}-01"
+        rows = self.db.fetchall("""
+            SELECT entry_date, hours, is_expense, amount_cents, description
+            FROM billing_entries
+            WHERE case_id = ? AND entry_date >= ? AND entry_date < ?
+            ORDER BY entry_date ASC, sort_order ASC
+        """, (case_id, start_date, end_date))
         return [dict(row) for row in rows]
 
     def get_entries_on_same_date(self, entry_id: int) -> List[dict]:
@@ -529,3 +634,52 @@ class RecentCountyQueries:
             (limit,)
         )
         return [row["county_name"] for row in rows]
+
+
+class InvoiceQueries:
+    def __init__(self, db):
+        self.db = db
+
+    def get_trust_balances(self, case_id: int, year: int, month: int) -> dict:
+        last_day = calendar.monthrange(year, month)[1]
+        cutoff_date = f"{year}-{month:02d}-{last_day:02d}"
+
+        billing_row = self.db.fetchone("""
+            SELECT 
+                COALESCE(SUM(CASE WHEN is_expense = 0 THEN hours * c.billing_rate_cents ELSE 0 END), 0) as total_fees_cents,
+                COALESCE(SUM(CASE WHEN is_expense = 1 THEN amount_cents ELSE 0 END), 0) as total_expenses_cents
+            FROM billing_entries be
+            JOIN cases c ON be.case_id = c.id
+            WHERE be.case_id = ? AND be.entry_date <= ?
+        """, (case_id, cutoff_date))
+        billing = dict(billing_row) if billing_row else {'total_fees_cents': 0, 'total_expenses_cents': 0}
+
+        payment_row = self.db.fetchone("""
+            SELECT 
+                COALESCE(SUM(amount_cents), 0) as total_fee_payments_cents,
+                COALESCE(SUM(expense_amount_cents), 0) as total_expense_payments_cents
+            FROM payments
+            WHERE case_id = ? AND payment_date <= ?
+        """, (case_id, cutoff_date))
+        payments = dict(payment_row) if payment_row else {'total_fee_payments_cents': 0, 'total_expense_payments_cents': 0}
+
+        total_fee_payments = payments['total_fee_payments_cents'] / 100.0
+        total_expense_payments = payments['total_expense_payments_cents'] / 100.0
+        total_fees_billed = billing['total_fees_cents'] / 100.0
+        total_expenses_billed = billing['total_expenses_cents'] / 100.0
+
+        fee_balance = total_fee_payments - total_fees_billed
+        expense_balance = total_expense_payments - total_expenses_billed
+
+        return {
+            'fee_balance': fee_balance,
+            'expense_balance': expense_balance,
+            'total_fee_payments': total_fee_payments,
+            'total_expense_payments': total_expense_payments,
+            'total_fees_billed': total_fees_billed,
+            'total_expenses_billed': total_expenses_billed
+        }
+
+    def get_billing_rate(self, case_id: int) -> float:
+        row = self.db.fetchone("SELECT billing_rate_cents FROM cases WHERE id = ?", (case_id,))
+        return (row['billing_rate_cents'] if row else 30000) / 100.0

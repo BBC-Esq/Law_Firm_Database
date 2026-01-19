@@ -4,11 +4,14 @@ from PySide6.QtWidgets import (
 from core.database import Database
 from core.queries import (
     PersonQueries, CaseQueries, CasePersonQueries,
-    BillingQueries, PaymentQueries, RecentCountyQueries
+    BillingQueries, PaymentQueries, RecentCountyQueries, InvoiceQueries
 )
 from gui.widgets.case_widget import CaseWidget
 from gui.widgets.people_widget import PeopleWidget
 from gui.widgets.matter_billing_widget import MatterBillingWidget
+from gui.widgets.call_log_widget import CallLogWidget
+from gui.widgets.email_log_widget import EmailLogWidget
+from gui.widgets.invoice_widget import InvoiceWidget
 
 
 class MainWindow(QMainWindow):
@@ -27,7 +30,11 @@ class MainWindow(QMainWindow):
         self.billing_queries = BillingQueries(self.db)
         self.payment_queries = PaymentQueries(self.db)
         self.recent_county_queries = RecentCountyQueries(self.db)
+        self.invoice_queries = InvoiceQueries(self.db)
         self.setup_ui()
+
+    def get_show_closed(self) -> bool:
+        return self.case_widget.get_show_closed()
 
     def setup_ui(self):
         central_widget = QWidget()
@@ -41,6 +48,7 @@ class MainWindow(QMainWindow):
             self.case_person_queries,
             self.recent_county_queries
         )
+        self.case_widget.show_closed_changed.connect(self.on_show_closed_changed)
         self.tab_widget.addTab(self.case_widget, "Client Matters")
         self.people_widget = PeopleWidget(
             self.person_queries,
@@ -53,13 +61,36 @@ class MainWindow(QMainWindow):
             self.payment_queries,
             self.case_queries,
             self.person_queries,
-            self.case_person_queries
+            self.case_person_queries,
+            get_show_closed_callback=self.get_show_closed
         )
         self.tab_widget.addTab(self.billing_widget, "Billing/Payments")
+        self.call_log_widget = CallLogWidget(
+            self.person_queries,
+            self.case_queries,
+            self.billing_queries
+        )
+        self.tab_widget.addTab(self.call_log_widget, "Call Log")
+        self.email_log_widget = EmailLogWidget(
+            self.case_queries,
+            self.billing_queries
+        )
+        self.tab_widget.addTab(self.email_log_widget, "Email Log")
+        self.invoice_widget = InvoiceWidget(
+            self.case_queries,
+            self.billing_queries,
+            self.invoice_queries,
+            get_show_closed_callback=self.get_show_closed
+        )
+        self.tab_widget.addTab(self.invoice_widget, "Invoicing")
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready")
         self.tab_widget.currentChanged.connect(self.on_tab_changed)
+
+    def on_show_closed_changed(self, show_closed: bool):
+        self.billing_widget.refresh()
+        self.invoice_widget.refresh()
 
     def on_tab_changed(self, index):
         widget = self.tab_widget.widget(index)
