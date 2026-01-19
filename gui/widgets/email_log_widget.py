@@ -27,10 +27,11 @@ class EmailLogWidget(QWidget):
         'recipients', 'recipients_normalized', 'cc', 'cc_normalized', 'subject', 'attachments'
     ]
 
-    def __init__(self, case_queries, billing_queries):
+    def __init__(self, case_queries, billing_queries, app_settings=None):
         super().__init__()
         self.case_queries = case_queries
         self.billing_queries = billing_queries
+        self.app_settings = app_settings
         self._loading = False
 
         if HAS_PANDAS:
@@ -72,7 +73,7 @@ class EmailLogWidget(QWidget):
         filter_layout.addStretch()
         main_layout.addWidget(filter_group)
 
-        splitter = QSplitter(Qt.Vertical)
+        self.splitter = QSplitter(Qt.Vertical)
 
         self.table = QTableWidget()
         self.table.setColumnCount(7)
@@ -90,18 +91,26 @@ class EmailLogWidget(QWidget):
         self.table.itemSelectionChanged.connect(self.on_row_selected)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.show_context_menu)
-        splitter.addWidget(self.table)
+        self.splitter.addWidget(self.table)
 
         self.email_viewer = QTextEdit()
         self.email_viewer.setReadOnly(True)
         self.email_viewer.setPlaceholderText("Select an email to view its contents")
-        splitter.addWidget(self.email_viewer)
+        self.splitter.addWidget(self.email_viewer)
 
-        splitter.setSizes([400, 300])
-        main_layout.addWidget(splitter)
+        self.splitter.setSizes([400, 300])
+
+        if self.app_settings:
+            self.app_settings.restore_splitter_state("email_log_widget", self.splitter)
+
+        main_layout.addWidget(self.splitter)
 
         self.status_label = QLabel("Records: 0")
         main_layout.addWidget(self.status_label)
+
+    def save_state(self):
+        if self.app_settings:
+            self.app_settings.save_splitter_state("email_log_widget", self.splitter)
 
     def on_filter_changed(self):
         if not self._loading:

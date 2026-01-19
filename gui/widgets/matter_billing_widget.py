@@ -22,7 +22,8 @@ class MatterBillingWidget(QWidget):
 
     def __init__(self, billing_queries: BillingQueries, payment_queries: PaymentQueries,
                  case_queries: CaseQueries, person_queries: PersonQueries,
-                 case_person_queries: CasePersonQueries, get_show_closed_callback=None):
+                 case_person_queries: CasePersonQueries, get_show_closed_callback=None,
+                 app_settings=None):
         super().__init__()
         self.billing_queries = billing_queries
         self.payment_queries = payment_queries
@@ -30,6 +31,7 @@ class MatterBillingWidget(QWidget):
         self.person_queries = person_queries
         self.case_person_queries = case_person_queries
         self.get_show_closed = get_show_closed_callback or (lambda: True)
+        self.app_settings = app_settings
         self.selected_client_id = None
         self.selected_matter = None
         self.billing_rate_cents = 0
@@ -112,21 +114,28 @@ class MatterBillingWidget(QWidget):
         info_layout.addStretch()
         layout.addWidget(self.info_frame)
 
-        splitter = QSplitter(Qt.Vertical)
+        self.splitter = QSplitter(Qt.Vertical)
 
         billing_group, self.billing_table, self.add_billing_btn = self._create_table_group(
             "Billing Entries", self.BILLING_HEADERS, "Add Entry",
             self.add_billing_entry, self.edit_billing_entry, self.show_billing_context_menu
         )
-        splitter.addWidget(billing_group)
+        self.splitter.addWidget(billing_group)
 
         payment_group, self.payment_table, self.add_payment_btn = self._create_table_group(
             "Payments", self.PAYMENT_HEADERS, "Add Payment",
             self.add_payment, self.edit_payment, self.show_payment_context_menu
         )
-        splitter.addWidget(payment_group)
+        self.splitter.addWidget(payment_group)
 
-        layout.addWidget(splitter, 1)
+        if self.app_settings:
+            self.app_settings.restore_splitter_state("billing_widget", self.splitter)
+
+        layout.addWidget(self.splitter, 1)
+
+    def save_state(self):
+        if self.app_settings:
+            self.app_settings.save_splitter_state("billing_widget", self.splitter)
 
     def show_billing_context_menu(self, position):
         entry_id = self.get_selected_billing_id()

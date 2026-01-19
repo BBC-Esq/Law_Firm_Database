@@ -19,12 +19,14 @@ class CaseWidget(QWidget):
     show_closed_changed = Signal(bool)
 
     def __init__(self, case_queries: CaseQueries, person_queries: PersonQueries,
-                 case_person_queries: CasePersonQueries, recent_county_queries: RecentCountyQueries):
+                 case_person_queries: CasePersonQueries, recent_county_queries: RecentCountyQueries,
+                 app_settings=None):
         super().__init__()
         self.case_queries = case_queries
         self.person_queries = person_queries
         self.case_person_queries = case_person_queries
         self.recent_county_queries = recent_county_queries
+        self.app_settings = app_settings
 
         self.setup_ui()
         self.refresh()
@@ -32,7 +34,7 @@ class CaseWidget(QWidget):
     def setup_ui(self):
         layout = QVBoxLayout(self)
 
-        splitter = QSplitter(Qt.Vertical)
+        self.splitter = QSplitter(Qt.Vertical)
 
         list_widget = QWidget()
         list_layout = QVBoxLayout(list_widget)
@@ -76,7 +78,7 @@ class CaseWidget(QWidget):
         self.count_label = QLabel()
         list_layout.addWidget(self.count_label)
 
-        splitter.addWidget(list_widget)
+        self.splitter.addWidget(list_widget)
 
         detail_group = QGroupBox("Matter Details")
         detail_layout = QVBoxLayout(detail_group)
@@ -90,13 +92,20 @@ class CaseWidget(QWidget):
         self.detail_widget.case_updated.connect(self.on_case_detail_updated)
         detail_layout.addWidget(self.detail_widget)
 
-        splitter.addWidget(detail_group)
+        self.splitter.addWidget(detail_group)
 
-        splitter.setSizes([400, 400])
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([400, 400])
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 1)
 
-        layout.addWidget(splitter)
+        if self.app_settings:
+            self.app_settings.restore_splitter_state("case_widget", self.splitter)
+
+        layout.addWidget(self.splitter)
+
+    def save_state(self):
+        if self.app_settings:
+            self.app_settings.save_splitter_state("case_widget", self.splitter)
 
     def get_show_closed(self) -> bool:
         return self.show_closed_checkbox.isChecked()

@@ -645,3 +645,130 @@ class InvoiceQueries:
     def get_billing_rate(self, case_id: int) -> float:
         row = self.db.fetchone("SELECT billing_rate_cents FROM cases WHERE id = ?", (case_id,))
         return (row['billing_rate_cents'] if row else 30000) / 100.0
+
+class ReportQueries:
+    def __init__(self, db):
+        self.db = db
+
+    def get_monthly_billing_summary(self, year: int, month: int, include_closed: bool = True) -> List[dict]:
+        start_date = f"{year}-{month:02d}-01"
+        if month == 12:
+            end_date = f"{year + 1}-01-01"
+        else:
+            end_date = f"{year}-{month + 1:02d}-01"
+
+        status_filter = "" if include_closed else "AND c.status = 'Open'"
+
+        query = f"""
+            SELECT 
+                c.id as case_id,
+                c.case_name,
+                c.case_number,
+                c.status,
+                c.billing_rate_cents,
+                p.first_name || ' ' || p.last_name as client_name,
+                COALESCE(billing.total_hours, 0) as total_hours,
+                COALESCE(billing.total_fees_cents, 0) as total_fees_cents,
+                COALESCE(billing.total_expenses_cents, 0) as total_expenses_cents,
+                COALESCE(payments.total_fee_payments_cents, 0) as total_fee_payments_cents,
+                COALESCE(payments.total_expense_payments_cents, 0) as total_expense_payments_cents
+            FROM cases c
+            LEFT JOIN case_people cp ON c.id = cp.case_id AND cp.role = 'client'
+            LEFT JOIN people p ON cp.person_id = p.id
+            LEFT JOIN (
+                SELECT 
+                    case_id,
+                    SUM(CASE WHEN is_expense = 0 THEN hours ELSE 0 END) as total_hours,
+                    SUM(CASE WHEN is_expense = 0 THEN hours * (
+                        SELECT billing_rate_cents FROM cases WHERE id = billing_entries.case_id
+                    ) ELSE 0 END) as total_fees_cents,
+                    SUM(CASE WHEN is_expense = 1 THEN amount_cents ELSE 0 END) as total_expenses_cents
+                FROM billing_entries
+                WHERE entry_date >= ? AND entry_date < ?
+                GROUP BY case_id
+            ) billing ON c.id = billing.case_id
+            LEFT JOIN (
+                SELECT 
+                    case_id,
+                    SUM(amount_cents) as total_fee_payments_cents,
+                    SUM(expense_amount_cents) as total_expense_payments_cents
+                FROM payments
+                WHERE payment_date >= ? AND payment_date < ?
+                GROUP BY case_id
+            ) payments ON c.id = payments.case_id
+            WHERE (billing.case_id IS NOT NULL OR payments.case_id IS NOT NULL)
+            {status_filter}
+            ORDER BY c.case_name
+        """
+
+        rows = self.db.fetchall(query, (start_date, end_date, start_date, end_date))
+        return [dict(row) for row in rows]
+
+    def get_all_matters_summary(self, include_closed: bool = True) -> List[dict]:
+        status_filter = "" if include_closed else "WHERE c.status = 'Open'"
+
+        query = f"""
+            SELECT 
+                c.id as case_id,
+                c.case_name,
+                c.case_number,
+                c.status,
+                c.billing_rate_cents,
+                p.first_name || ' ' || p.last_name as client_name,
+                COALESCE(billing.total_hours, 0) as total_hours,
+                COALESCE(billing.total_fees_cents, 0) as total_fees_cents,
+                COALESCE(billing.total_expenses_cents, 0) as total_expenses_cents,
+                COALESCE(payments.total_fee_payments_cents, 0) as total_fee_payments_cents,
+                COALESCE(payments.total_expense_payments_cents, 0) as total_expense_payments_cents
+            FROM cases c
+            LEFT JOIN case_people cp ON c.id = cp.case_id AND cp.role = 'client'
+            LEFT JOIN people p ON cp.person_id = p.id
+            LEFT JOIN (
+                SELECT 
+                    case_id,
+                    SUM(CASE WHEN is_expense = 0 THEN hours ELSE 0 END) as total_hours,
+                    SUM(CASE WHEN is_expense = 0 THEN hours * (
+                        SELECT billing_rate_cents FROM cases WHERE id = billing_entries.case_id
+                    ) ELSE 0 END) as total_fees_cents,
+                    SUM(CASE WHEN is_expense = 1 THEN amount_cents ELSE 0 END) as total_expenses_cents
+                FROM billing_entries
+                GROUP BY case_id
+            ) billing ON c.id = billing.case_id
+            LEFT JOIN (
+                SELECT 
+                    case_id,
+                    SUM(amount_cents) as total_fee_payments_cents,
+                    SUM(expense_amount_cents) as total_expense_payments_cents
+                FROM payments
+                GROUP BY case_id
+            ) payments ON c.id = payments.case_id
+            {status_filter}
+            ORDER BY c.case_name
+        """
+
+        rows = self.db.fetchall(query)
+        return [dict(row) for row in rows]
+
+    def get_period_totals(self, year: int, month: int, include_closed: bool = True) -> dict:
+        data = self.get_monthly_billing_summary(year, month, include_closed)
+        
+        totals = {
+            'total_hours': 0,
+            'total_fees_cents': 0,
+            'total_expenses_cents': 0,
+            'total_fee_payments_cents': 0,
+            'total_expense_payments_cents': 0,
+            'matter_count': len(data)
+        }
+
+        for row in data:
+            totals['total_hours'] += row.get('total_hours') or 0
+            totals['total_fees_cents'] += row.get('total_fees_cents') or 0
+            totals['total_expenses_cents'] += row.get('total_expenses_cents') or 0
+            totals['total_fee_payments_cents'] += row.get('total_fee_payments_cents') or 0
+            totals['total_expense_payments_cents'] += row.get('total_expense_payments_cents') or 0
+
+        totals['total_billed_cents'] = totals['total_fees_cents'] + totals['total_expenses_cents']
+        totals['total_payments_cents'] = totals['total_fee_payments_cents'] + totals['total_expense_payments_cents']
+
+        return totals
