@@ -33,7 +33,6 @@ def configure_standard_table(table: QTableWidget, headers: list,
 
 
 def configure_billing_table(table: QTableWidget, headers: list):
-    """Configure a table for billing/payment entries with word wrap."""
     table.setColumnCount(len(headers))
     table.setHorizontalHeaderLabels(headers)
     table.setColumnHidden(0, True)
@@ -56,6 +55,15 @@ def get_selected_row_id(table: QTableWidget, id_column: int = 0):
         if id_item:
             return int(id_item.text())
     return None
+
+
+def set_table_row(table: QTableWidget, row: int, values: list, alignments: dict = None):
+    for col, value in enumerate(values):
+        text = str(value) if value is not None else ""
+        item = QTableWidgetItem(text)
+        if alignments and col in alignments:
+            item.setTextAlignment(alignments[col])
+        table.setItem(row, col, item)
 
 
 def populate_table_rows(table: QTableWidget, data: list, row_formatter: Callable,

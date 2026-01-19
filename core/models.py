@@ -1,6 +1,6 @@
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Optional
+from typing import Optional, ClassVar, List
 from core.utils import parse_date, parse_datetime
 
 
@@ -22,19 +22,17 @@ MATTER_STATUSES = ('Open', 'Closed')
 
 
 def _convert_field(obj, name, converter):
-    """Convert a field value using the given converter."""
     value = getattr(obj, name)
     if value is not None:
         setattr(obj, name, converter(value))
 
 
-def _post_init_common(obj, date_fields=None, datetime_fields=None, bool_fields=None):
-    """Common post_init processing for date/datetime/bool fields."""
-    for field in (date_fields or []):
+def _post_init_from_class_attrs(obj):
+    for field in getattr(obj, '_date_fields', []):
         _convert_field(obj, field, parse_date)
-    for field in (datetime_fields or []):
+    for field in getattr(obj, '_datetime_fields', []):
         _convert_field(obj, field, parse_datetime)
-    for field in (bool_fields or []):
+    for field in getattr(obj, '_bool_fields', []):
         val = getattr(obj, field)
         if isinstance(val, int):
             setattr(obj, field, bool(val))
@@ -42,6 +40,10 @@ def _post_init_common(obj, date_fields=None, datetime_fields=None, bool_fields=N
 
 @dataclass
 class Person:
+    _datetime_fields: ClassVar[List[str]] = ['created_at']
+    _date_fields: ClassVar[List[str]] = []
+    _bool_fields: ClassVar[List[str]] = []
+
     id: Optional[int] = None
     first_name: str = ""
     last_name: str = ""
@@ -55,7 +57,7 @@ class Person:
     created_at: Optional[datetime] = None
 
     def __post_init__(self):
-        _post_init_common(self, datetime_fields=['created_at'])
+        _post_init_from_class_attrs(self)
 
     @property
     def full_name(self) -> str:
@@ -70,6 +72,10 @@ class Person:
 
 @dataclass
 class Case:
+    _datetime_fields: ClassVar[List[str]] = ['created_at']
+    _date_fields: ClassVar[List[str]] = []
+    _bool_fields: ClassVar[List[str]] = ['is_litigation']
+
     id: Optional[int] = None
     case_number: str = ""
     case_name: str = ""
@@ -81,11 +87,15 @@ class Case:
     created_at: Optional[datetime] = None
 
     def __post_init__(self):
-        _post_init_common(self, datetime_fields=['created_at'], bool_fields=['is_litigation'])
+        _post_init_from_class_attrs(self)
 
 
 @dataclass
 class CasePerson:
+    _datetime_fields: ClassVar[List[str]] = ['created_at']
+    _date_fields: ClassVar[List[str]] = []
+    _bool_fields: ClassVar[List[str]] = ['is_pro_se']
+
     id: Optional[int] = None
     case_id: Optional[int] = None
     person_id: Optional[int] = None
@@ -96,11 +106,15 @@ class CasePerson:
     created_at: Optional[datetime] = None
 
     def __post_init__(self):
-        _post_init_common(self, datetime_fields=['created_at'], bool_fields=['is_pro_se'])
+        _post_init_from_class_attrs(self)
 
 
 @dataclass
 class BillingEntry:
+    _datetime_fields: ClassVar[List[str]] = ['created_at']
+    _date_fields: ClassVar[List[str]] = ['entry_date']
+    _bool_fields: ClassVar[List[str]] = ['is_expense']
+
     id: Optional[int] = None
     case_id: Optional[int] = None
     entry_date: Optional[date] = None
@@ -112,10 +126,15 @@ class BillingEntry:
     created_at: Optional[datetime] = None
 
     def __post_init__(self):
-        _post_init_common(self, date_fields=['entry_date'], datetime_fields=['created_at'], bool_fields=['is_expense'])
+        _post_init_from_class_attrs(self)
+
 
 @dataclass
 class Payment:
+    _datetime_fields: ClassVar[List[str]] = ['created_at']
+    _date_fields: ClassVar[List[str]] = ['payment_date']
+    _bool_fields: ClassVar[List[str]] = []
+
     id: Optional[int] = None
     person_id: Optional[int] = None
     case_id: Optional[int] = None
@@ -128,7 +147,7 @@ class Payment:
     created_at: Optional[datetime] = None
 
     def __post_init__(self):
-        _post_init_common(self, date_fields=['payment_date'], datetime_fields=['created_at'])
+        _post_init_from_class_attrs(self)
 
     @property
     def total_amount_cents(self) -> int:

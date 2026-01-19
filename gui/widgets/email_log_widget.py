@@ -5,13 +5,14 @@ from email import policy
 from email.parser import BytesParser
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
-    QTableWidgetItem, QFileDialog, QDateEdit, QLabel, QComboBox,
-    QGroupBox, QCheckBox, QHeaderView, QMessageBox, QMenu,
+    QTableWidgetItem, QFileDialog, QLabel, QComboBox,
+    QGroupBox, QHeaderView, QMessageBox, QMenu,
     QTextEdit, QSplitter
 )
-from PySide6.QtCore import QDate, Qt, QSignalBlocker
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QCursor, QDesktopServices
 from gui.dialogs.quick_billing_dialog import QuickBillingDialog
+from gui.widgets.date_filter_widget import DateFilterWidget
 
 try:
     import pandas as pd
@@ -21,6 +22,11 @@ except ImportError:
 
 
 class EmailLogWidget(QWidget):
+    COLUMNS = [
+        'file_path', 'email_datetime', 'email_date', 'sender', 'sender_normalized',
+        'recipients', 'recipients_normalized', 'cc', 'cc_normalized', 'subject', 'attachments'
+    ]
+
     def __init__(self, case_queries, billing_queries):
         super().__init__()
         self.case_queries = case_queries
@@ -28,12 +34,7 @@ class EmailLogWidget(QWidget):
         self._loading = False
 
         if HAS_PANDAS:
-            self.df = pd.DataFrame(columns=[
-                'file_path', 'email_datetime', 'email_date', 'sender', 'sender_normalized',
-                'recipients', 'recipients_normalized', 'cc', 'cc_normalized', 'subject', 'attachments'
-            ])
-        else:
-            self.records = []
+            self.df = pd.DataFrame(columns=self.COLUMNS)
 
         self.setup_ui()
         self.refresh_table()
@@ -54,27 +55,9 @@ class EmailLogWidget(QWidget):
         filter_group = QGroupBox("Filter & Sort")
         filter_layout = QHBoxLayout(filter_group)
 
-        date_layout = QVBoxLayout()
-        self.use_date_filter = QCheckBox("Enable Date Filter")
-        self.use_date_filter.stateChanged.connect(self.on_filter_changed)
-        date_layout.addWidget(self.use_date_filter)
-        date_range_layout = QHBoxLayout()
-        date_range_layout.addWidget(QLabel("From:"))
-        self.start_date = QDateEdit()
-        self.start_date.setCalendarPopup(True)
-        self.start_date.setDate(QDate.currentDate().addMonths(-1))
-        self.start_date.setEnabled(False)
-        self.start_date.dateChanged.connect(self.on_filter_changed)
-        date_range_layout.addWidget(self.start_date)
-        date_range_layout.addWidget(QLabel("To:"))
-        self.end_date = QDateEdit()
-        self.end_date.setCalendarPopup(True)
-        self.end_date.setDate(QDate.currentDate())
-        self.end_date.setEnabled(False)
-        self.end_date.dateChanged.connect(self.on_filter_changed)
-        date_range_layout.addWidget(self.end_date)
-        date_layout.addLayout(date_range_layout)
-        filter_layout.addLayout(date_layout)
+        self.date_filter = DateFilterWidget()
+        self.date_filter.filter_changed.connect(self.on_filter_changed)
+        filter_layout.addWidget(self.date_filter)
 
         filter_layout.addSpacing(20)
 
@@ -122,7 +105,6 @@ class EmailLogWidget(QWidget):
 
     def on_filter_changed(self):
         if not self._loading:
-            self.toggle_date_filter()
             self.refresh_table()
 
     def show_context_menu(self, position):
@@ -170,7 +152,6 @@ class EmailLogWidget(QWidget):
         if file_path_item:
             file_path = file_path_item.text()
             if os.path.exists(file_path):
-                from PySide6.QtCore import QUrl
                 QDesktopServices.openUrl(QUrl.fromLocalFile(file_path))
             else:
                 QMessageBox.warning(self, "File Not Found", f"The file no longer exists:\n{file_path}")
@@ -240,11 +221,6 @@ class EmailLogWidget(QWidget):
             self.email_viewer.setPlainText("\n".join(output))
         except Exception as e:
             self.email_viewer.setPlainText(f"Error loading email:\n{str(e)}")
-
-    def toggle_date_filter(self):
-        enabled = self.use_date_filter.isChecked()
-        self.start_date.setEnabled(enabled)
-        self.end_date.setEnabled(enabled)
 
     def normalize_email(self, email):
         if not email:
@@ -375,6 +351,9 @@ class EmailLogWidget(QWidget):
         else:
             QMessageBox.information(self, "Import Complete", message)
 
+    def _update_status(self, filtered_count: int, total_count: int):
+        self.status_label.setText(f"Records: {filtered_count} (Total loaded: {total_count})")
+
     def refresh_table(self):
         if self._loading:
             return
@@ -393,9 +372,8 @@ class EmailLogWidget(QWidget):
         try:
             filtered_df = self.df.copy()
 
-            if self.use_date_filter.isChecked():
-                start = self.start_date.date().toString("yyyy-MM-dd")
-                end = self.end_date.date().toString("yyyy-MM-dd")
+            if self.date_filter.is_enabled():
+                start, end = self.date_filter.get_range()
                 mask = (filtered_df['email_date'] >= start) & (filtered_df['email_date'] <= end)
                 filtered_df = filtered_df[mask]
 
@@ -427,7 +405,7 @@ class EmailLogWidget(QWidget):
                 self.table.setItem(row_idx, 5, QTableWidgetItem(str(row['attachments'] or "")))
                 self.table.setItem(row_idx, 6, QTableWidgetItem(str(row['file_path'] or "")))
 
-            self.status_label.setText(f"Records: {len(filtered_df)} (Total loaded: {len(self.df)})")
+            self._update_status(len(filtered_df), len(self.df))
             self.email_viewer.clear()
 
         except Exception as e:
@@ -441,10 +419,7 @@ class EmailLogWidget(QWidget):
         )
         if reply == QMessageBox.Yes:
             if HAS_PANDAS:
-                self.df = pd.DataFrame(columns=[
-                    'file_path', 'email_datetime', 'email_date', 'sender', 'sender_normalized',
-                    'recipients', 'recipients_normalized', 'cc', 'cc_normalized', 'subject', 'attachments'
-                ])
+                self.df = pd.DataFrame(columns=self.COLUMNS)
             self.refresh_table()
 
     def refresh(self):

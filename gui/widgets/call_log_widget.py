@@ -3,13 +3,14 @@ import csv
 from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
-    QTableWidgetItem, QFileDialog, QDateEdit, QLabel, QComboBox,
-    QGroupBox, QCheckBox, QHeaderView, QMessageBox, QLineEdit, QMenu
+    QTableWidgetItem, QFileDialog, QLabel, QComboBox,
+    QGroupBox, QHeaderView, QMessageBox, QLineEdit, QMenu
 )
-from PySide6.QtCore import QDate, Qt, QSignalBlocker
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QCursor
 from core.models import ROLE_DISPLAY_NAMES
 from gui.dialogs.quick_billing_dialog import QuickBillingDialog
+from gui.widgets.date_filter_widget import DateFilterWidget
 
 try:
     import pandas as pd
@@ -19,6 +20,8 @@ except ImportError:
 
 
 class CallLogWidget(QWidget):
+    COLUMNS = ['call_datetime', 'call_date', 'phone_number', 'phone_digits', 'duration_minutes']
+
     def __init__(self, person_queries, case_queries, billing_queries):
         super().__init__()
         self.person_queries = person_queries
@@ -29,9 +32,7 @@ class CallLogWidget(QWidget):
         self._loading = False
 
         if HAS_PANDAS:
-            self.df = pd.DataFrame(columns=['call_datetime', 'call_date', 'phone_number', 'phone_digits', 'duration_minutes'])
-        else:
-            self.records = []
+            self.df = pd.DataFrame(columns=self.COLUMNS)
 
         self.setup_ui()
         self.load_phone_contacts()
@@ -92,27 +93,9 @@ class CallLogWidget(QWidget):
         filter_group = QGroupBox("Filter & Sort")
         filter_layout = QHBoxLayout(filter_group)
 
-        date_layout = QVBoxLayout()
-        self.use_date_filter = QCheckBox("Enable Date Filter")
-        self.use_date_filter.stateChanged.connect(self.on_filter_changed)
-        date_layout.addWidget(self.use_date_filter)
-        date_range_layout = QHBoxLayout()
-        date_range_layout.addWidget(QLabel("From:"))
-        self.start_date = QDateEdit()
-        self.start_date.setCalendarPopup(True)
-        self.start_date.setDate(QDate.currentDate().addMonths(-1))
-        self.start_date.setEnabled(False)
-        self.start_date.dateChanged.connect(self.on_filter_changed)
-        date_range_layout.addWidget(self.start_date)
-        date_range_layout.addWidget(QLabel("To:"))
-        self.end_date = QDateEdit()
-        self.end_date.setCalendarPopup(True)
-        self.end_date.setDate(QDate.currentDate())
-        self.end_date.setEnabled(False)
-        self.end_date.dateChanged.connect(self.on_filter_changed)
-        date_range_layout.addWidget(self.end_date)
-        date_layout.addLayout(date_range_layout)
-        filter_layout.addLayout(date_layout)
+        self.date_filter = DateFilterWidget()
+        self.date_filter.filter_changed.connect(self.on_filter_changed)
+        filter_layout.addWidget(self.date_filter)
 
         filter_layout.addSpacing(20)
 
@@ -155,7 +138,6 @@ class CallLogWidget(QWidget):
 
     def on_filter_changed(self):
         if not self._loading:
-            self.toggle_date_filter()
             self.refresh_table()
 
     def on_refresh_contacts(self):
@@ -203,11 +185,6 @@ class CallLogWidget(QWidget):
             entry_data = dialog.get_entry_data()
             self.billing_queries.create_from_dict(entry_data)
             QMessageBox.information(self, "Success", "Billing entry added successfully.")
-
-    def toggle_date_filter(self):
-        enabled = self.use_date_filter.isChecked()
-        self.start_date.setEnabled(enabled)
-        self.end_date.setEnabled(enabled)
 
     def normalize_phone(self, phone):
         if not phone:
@@ -304,6 +281,9 @@ class CallLogWidget(QWidget):
         else:
             QMessageBox.information(self, "Import Complete", message)
 
+    def _update_status(self, filtered_count: int, total_count: int):
+        self.status_label.setText(f"Records: {filtered_count} (Total loaded: {total_count})")
+
     def refresh_table(self):
         if self._loading:
             return
@@ -321,9 +301,8 @@ class CallLogWidget(QWidget):
         try:
             filtered_df = self.df.copy()
 
-            if self.use_date_filter.isChecked():
-                start = self.start_date.date().toString("yyyy-MM-dd")
-                end = self.end_date.date().toString("yyyy-MM-dd")
+            if self.date_filter.is_enabled():
+                start, end = self.date_filter.get_range()
                 mask = (filtered_df['call_date'] >= start) & (filtered_df['call_date'] <= end)
                 filtered_df = filtered_df[mask]
 
@@ -364,7 +343,7 @@ class CallLogWidget(QWidget):
                 self.table.setItem(row_idx, 2, QTableWidgetItem(contact_names.loc[idx]))
                 self.table.setItem(row_idx, 3, QTableWidgetItem(str(row['duration_minutes'])))
 
-            self.status_label.setText(f"Records: {len(filtered_df)} (Total loaded: {len(self.df)})")
+            self._update_status(len(filtered_df), len(self.df))
             
         except Exception as e:
             self.status_label.setText(f"Error refreshing: {str(e)}")
@@ -377,7 +356,7 @@ class CallLogWidget(QWidget):
         )
         if reply == QMessageBox.Yes:
             if HAS_PANDAS:
-                self.df = pd.DataFrame(columns=['call_datetime', 'call_date', 'phone_number', 'phone_digits', 'duration_minutes'])
+                self.df = pd.DataFrame(columns=self.COLUMNS)
             self.refresh_table()
 
     def refresh(self):

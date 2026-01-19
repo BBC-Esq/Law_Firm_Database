@@ -6,7 +6,6 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QDoubleSpinBox, QPushButton, QGroupBox, QFormLayout, QMessageBox, QFileDialog
 )
-from PySide6.QtCore import Qt
 from core.utils import format_matter_display
 from gui.utils import select_all_on_focus, load_combo_with_items
 from gui.widgets.styled_combo_box import StyledComboBox
@@ -29,7 +28,7 @@ def get_image_path():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "law_image.jpg")
 
 
-def set_cell_border(cell, border_size=0):
+def set_cell_border(cell):
     tc = cell._tc
     tcPr = tc.get_or_add_tcPr()
     tcBorders = OxmlElement('w:tcBorders')
@@ -61,6 +60,12 @@ def add_paragraph_no_spacing(doc, text="", alignment=None, bold=False, font_size
 
 
 class InvoiceWidget(QWidget):
+    BOLD_LABELS = {
+        "FEE TRUST ACCOUNT", "EXPENSE TRUST ACCOUNT", "Fee Trust Balance:",
+        "Expense Trust Balance:", "Combined Trust Balance:",
+        "Fee Replenishment Required:", "Expense Replenishment Required:"
+    }
+
     def __init__(self, case_queries, billing_queries, invoice_queries, get_show_closed_callback=None):
         super().__init__()
         self.case_queries = case_queries
@@ -221,6 +226,28 @@ class InvoiceWidget(QWidget):
         web_run = right_para.add_run("www.chintellalaw.com")
         web_run.font.size = Pt(10)
 
+    def _create_summary_table(self, doc, rows_data: list, bold_labels: set = None):
+        if bold_labels is None:
+            bold_labels = self.BOLD_LABELS
+        summary_table = doc.add_table(rows=len(rows_data), cols=2)
+        summary_table.style = 'Table Grid'
+        summary_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+        for i, (label, value) in enumerate(rows_data):
+            summary_table.rows[i].cells[0].text = label
+            summary_table.rows[i].cells[1].text = value
+            summary_table.rows[i].cells[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            if label in bold_labels:
+                for paragraph in summary_table.rows[i].cells[0].paragraphs:
+                    for run in paragraph.runs:
+                        run.bold = True
+                if value:
+                    for paragraph in summary_table.rows[i].cells[1].paragraphs:
+                        for run in paragraph.runs:
+                            run.bold = True
+        self.remove_paragraph_spacing_in_table(summary_table)
+        return summary_table
+
     def calculate_reconciliation(self, fee_balance, expense_balance, fee_target, expense_target, mode):
         result = {
             'original_fee_balance': fee_balance,
@@ -276,6 +303,148 @@ class InvoiceWidget(QWidget):
             result['total_due'] = result['fee_replenishment'] + result['expense_replenishment']
 
         return result
+
+    def _build_summary_rows(self, trust_data, fee_balance, expense_balance, fee_target, expense_target, reconciliation):
+        if reconciliation['is_final']:
+            rows_data = [
+                ("FEE TRUST ACCOUNT", ""),
+                ("Total Fee Payments Received:", f"${trust_data['total_fee_payments']:.2f}"),
+                ("Total Fees Billed:", f"(${trust_data['total_fees_billed']:.2f})"),
+                ("Fee Trust Balance:", f"${fee_balance:.2f}"),
+                ("", ""),
+                ("EXPENSE TRUST ACCOUNT", ""),
+                ("Total Expense Payments Received:", f"${trust_data['total_expense_payments']:.2f}"),
+                ("Total Expenses Billed:", f"(${trust_data['total_expenses_billed']:.2f})"),
+                ("Expense Trust Balance:", f"${expense_balance:.2f}"),
+                ("", ""),
+                ("Combined Trust Balance:", f"${fee_balance + expense_balance:.2f}"),
+            ]
+            if reconciliation['transfer_amount'] > 0:
+                if reconciliation['transfer_direction'] == 'expense_to_fee':
+                    rows_data.append((f"(Expense funds applied to fees: ${reconciliation['transfer_amount']:.2f})", ""))
+                else:
+                    rows_data.append((f"(Fee funds applied to expenses: ${reconciliation['transfer_amount']:.2f})", ""))
+            return rows_data
+
+        elif reconciliation['transfer_amount'] > 0:
+            if reconciliation['transfer_direction'] == 'expense_to_fee':
+                transfer_label = "Transfer from Expense to Fee Trust:"
+            else:
+                transfer_label = "Transfer from Fee to Expense Trust:"
+
+            return [
+                ("FEE TRUST ACCOUNT", ""),
+                ("Total Fee Payments Received:", f"${trust_data['total_fee_payments']:.2f}"),
+                ("Total Fees Billed:", f"(${trust_data['total_fees_billed']:.2f})"),
+                ("Fee Trust Balance:", f"${fee_balance:.2f}"),
+                ("", ""),
+                ("EXPENSE TRUST ACCOUNT", ""),
+                ("Total Expense Payments Received:", f"${trust_data['total_expense_payments']:.2f}"),
+                ("Total Expenses Billed:", f"(${trust_data['total_expenses_billed']:.2f})"),
+                ("Expense Trust Balance:", f"${expense_balance:.2f}"),
+                ("", ""),
+                (transfer_label, f"${reconciliation['transfer_amount']:.2f}"),
+                ("", ""),
+                ("Adjusted Fee Trust Balance:", f"${reconciliation['adjusted_fee_balance']:.2f}"),
+                ("Fee Trust Target:", f"${fee_target:.2f}"),
+                ("Fee Replenishment Required:", f"${reconciliation['fee_replenishment']:.2f}"),
+                ("", ""),
+                ("Adjusted Expense Trust Balance:", f"${reconciliation['adjusted_expense_balance']:.2f}"),
+                ("Expense Trust Target:", f"${expense_target:.2f}"),
+                ("Expense Replenishment Required:", f"${reconciliation['expense_replenishment']:.2f}"),
+            ]
+        else:
+            return [
+                ("FEE TRUST ACCOUNT", ""),
+                ("Total Fee Payments Received:", f"${trust_data['total_fee_payments']:.2f}"),
+                ("Total Fees Billed:", f"(${trust_data['total_fees_billed']:.2f})"),
+                ("Fee Trust Balance:", f"${fee_balance:.2f}"),
+                ("Fee Trust Target:", f"${fee_target:.2f}"),
+                ("Fee Replenishment Required:", f"${reconciliation['fee_replenishment']:.2f}"),
+                ("", ""),
+                ("EXPENSE TRUST ACCOUNT", ""),
+                ("Total Expense Payments Received:", f"${trust_data['total_expense_payments']:.2f}"),
+                ("Total Expenses Billed:", f"(${trust_data['total_expenses_billed']:.2f})"),
+                ("Expense Trust Balance:", f"${expense_balance:.2f}"),
+                ("Expense Trust Target:", f"${expense_target:.2f}"),
+                ("Expense Replenishment Required:", f"${reconciliation['expense_replenishment']:.2f}"),
+            ]
+
+    def _add_time_entries_table(self, doc, time_entries, billing_rate, period_fees):
+        add_paragraph_no_spacing(doc, "Professional Services", bold=True, font_size=Pt(12))
+        fees_table = doc.add_table(rows=1, cols=5)
+        fees_table.style = 'Table Grid'
+        fees_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        fees_table.autofit = False
+        widths = [Inches(0.9), Inches(3.6), Inches(0.6), Inches(0.7), Inches(0.8)]
+        self.set_column_widths(fees_table, widths)
+        hdr_cells = fees_table.rows[0].cells
+        for i, text in enumerate(['Date', 'Description', 'Hours', 'Rate', 'Amount']):
+            hdr_cells[i].text = text
+            hdr_cells[i].paragraphs[0].runs[0].bold = True
+            hdr_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for entry in time_entries:
+            row_cells = fees_table.add_row().cells
+            row_cells[0].text = str(entry['entry_date'])
+            row_cells[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            row_cells[0].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+            row_cells[1].text = entry['description'] or ''
+            row_cells[2].text = f"{entry['hours']:.1f}"
+            row_cells[2].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            row_cells[2].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+            row_cells[3].text = f"${billing_rate:.2f}"
+            row_cells[3].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            row_cells[3].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+            amount = (entry['hours'] or 0) * billing_rate
+            row_cells[4].text = f"${amount:.2f}"
+            row_cells[4].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            row_cells[4].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        total_row = fees_table.add_row().cells
+        total_row[0].merge(total_row[3])
+        total_row[0].text = "Total Professional Services"
+        total_row[0].paragraphs[0].runs[0].bold = True
+        total_row[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        total_row[4].text = f"${period_fees:.2f}"
+        total_row[4].paragraphs[0].runs[0].bold = True
+        total_row[4].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        self.set_column_widths(fees_table, widths)
+        self.remove_paragraph_spacing_in_table(fees_table)
+        add_paragraph_no_spacing(doc)
+
+    def _add_expense_entries_table(self, doc, expense_entries, period_expenses):
+        add_paragraph_no_spacing(doc, "Expenses", bold=True, font_size=Pt(12))
+        exp_table = doc.add_table(rows=1, cols=3)
+        exp_table.style = 'Table Grid'
+        exp_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        exp_table.autofit = False
+        widths = [Inches(0.9), Inches(4.9), Inches(0.8)]
+        self.set_column_widths(exp_table, widths)
+        hdr_cells = exp_table.rows[0].cells
+        for i, text in enumerate(['Date', 'Description', 'Amount']):
+            hdr_cells[i].text = text
+            hdr_cells[i].paragraphs[0].runs[0].bold = True
+            hdr_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for entry in expense_entries:
+            row_cells = exp_table.add_row().cells
+            row_cells[0].text = str(entry['entry_date'])
+            row_cells[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            row_cells[0].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+            row_cells[1].text = entry['description'] or ''
+            amount = (entry['amount_cents'] or 0) / 100.0
+            row_cells[2].text = f"${amount:.2f}"
+            row_cells[2].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            row_cells[2].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        total_row = exp_table.add_row().cells
+        total_row[0].merge(total_row[1])
+        total_row[0].text = "Total Expenses"
+        total_row[0].paragraphs[0].runs[0].bold = True
+        total_row[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        total_row[2].text = f"${period_expenses:.2f}"
+        total_row[2].paragraphs[0].runs[0].bold = True
+        total_row[2].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        self.set_column_widths(exp_table, widths)
+        self.remove_paragraph_spacing_in_table(exp_table)
+        add_paragraph_no_spacing(doc)
 
     def generate_invoice(self):
         if not HAS_DOCX:
@@ -341,201 +510,14 @@ class InvoiceWidget(QWidget):
         add_paragraph_no_spacing(doc)
 
         if time_entries:
-            add_paragraph_no_spacing(doc, "Professional Services", bold=True, font_size=Pt(12))
-            fees_table = doc.add_table(rows=1, cols=5)
-            fees_table.style = 'Table Grid'
-            fees_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-            fees_table.autofit = False
-            self.set_column_widths(fees_table, [Inches(0.9), Inches(3.6), Inches(0.6), Inches(0.7), Inches(0.8)])
-            hdr_cells = fees_table.rows[0].cells
-            headers = ['Date', 'Description', 'Hours', 'Rate', 'Amount']
-            for i, text in enumerate(headers):
-                hdr_cells[i].text = text
-                hdr_cells[i].paragraphs[0].runs[0].bold = True
-                hdr_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            for entry in time_entries:
-                row_cells = fees_table.add_row().cells
-                row_cells[0].text = str(entry['entry_date'])
-                row_cells[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                row_cells[0].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-                row_cells[1].text = entry['description'] or ''
-                row_cells[2].text = f"{entry['hours']:.1f}"
-                row_cells[2].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                row_cells[2].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-                row_cells[3].text = f"${billing_rate:.2f}"
-                row_cells[3].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                row_cells[3].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-                amount = (entry['hours'] or 0) * billing_rate
-                row_cells[4].text = f"${amount:.2f}"
-                row_cells[4].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                row_cells[4].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-            total_row = fees_table.add_row().cells
-            total_row[0].merge(total_row[3])
-            total_row[0].text = "Total Professional Services"
-            total_row[0].paragraphs[0].runs[0].bold = True
-            total_row[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-            total_row[4].text = f"${period_fees:.2f}"
-            total_row[4].paragraphs[0].runs[0].bold = True
-            total_row[4].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            self.set_column_widths(fees_table, [Inches(0.9), Inches(3.6), Inches(0.6), Inches(0.7), Inches(0.8)])
-            self.remove_paragraph_spacing_in_table(fees_table)
-            add_paragraph_no_spacing(doc)
+            self._add_time_entries_table(doc, time_entries, billing_rate, period_fees)
 
         if expense_entries:
-            add_paragraph_no_spacing(doc, "Expenses", bold=True, font_size=Pt(12))
-            exp_table = doc.add_table(rows=1, cols=3)
-            exp_table.style = 'Table Grid'
-            exp_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-            exp_table.autofit = False
-            self.set_column_widths(exp_table, [Inches(0.9), Inches(4.9), Inches(0.8)])
-            hdr_cells = exp_table.rows[0].cells
-            headers = ['Date', 'Description', 'Amount']
-            for i, text in enumerate(headers):
-                hdr_cells[i].text = text
-                hdr_cells[i].paragraphs[0].runs[0].bold = True
-                hdr_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            for entry in expense_entries:
-                row_cells = exp_table.add_row().cells
-                row_cells[0].text = str(entry['entry_date'])
-                row_cells[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                row_cells[0].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-                row_cells[1].text = entry['description'] or ''
-                amount = (entry['amount_cents'] or 0) / 100.0
-                row_cells[2].text = f"${amount:.2f}"
-                row_cells[2].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                row_cells[2].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-            total_row = exp_table.add_row().cells
-            total_row[0].merge(total_row[1])
-            total_row[0].text = "Total Expenses"
-            total_row[0].paragraphs[0].runs[0].bold = True
-            total_row[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-            total_row[2].text = f"${period_expenses:.2f}"
-            total_row[2].paragraphs[0].runs[0].bold = True
-            total_row[2].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            self.set_column_widths(exp_table, [Inches(0.9), Inches(4.9), Inches(0.8)])
-            self.remove_paragraph_spacing_in_table(exp_table)
-            add_paragraph_no_spacing(doc)
+            self._add_expense_entries_table(doc, expense_entries, period_expenses)
 
         add_paragraph_no_spacing(doc, f"Trust Account Summary as of {balance_date_str}", bold=True, font_size=Pt(12))
-
-        if reconciliation['is_final']:
-            rows_data = [
-                ("FEE TRUST ACCOUNT", ""),
-                ("Total Fee Payments Received:", f"${trust_data['total_fee_payments']:.2f}"),
-                ("Total Fees Billed:", f"(${trust_data['total_fees_billed']:.2f})"),
-                ("Fee Trust Balance:", f"${fee_balance:.2f}"),
-                ("", ""),
-                ("EXPENSE TRUST ACCOUNT", ""),
-                ("Total Expense Payments Received:", f"${trust_data['total_expense_payments']:.2f}"),
-                ("Total Expenses Billed:", f"(${trust_data['total_expenses_billed']:.2f})"),
-                ("Expense Trust Balance:", f"${expense_balance:.2f}"),
-                ("", ""),
-                ("Combined Trust Balance:", f"${fee_balance + expense_balance:.2f}"),
-            ]
-
-            if reconciliation['transfer_amount'] > 0:
-                if reconciliation['transfer_direction'] == 'expense_to_fee':
-                    rows_data.append((f"(Expense funds applied to fees: ${reconciliation['transfer_amount']:.2f})", ""))
-                else:
-                    rows_data.append((f"(Fee funds applied to expenses: ${reconciliation['transfer_amount']:.2f})", ""))
-
-            summary_table = doc.add_table(rows=len(rows_data), cols=2)
-            summary_table.style = 'Table Grid'
-            summary_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-
-            for i, (label, value) in enumerate(rows_data):
-                summary_table.rows[i].cells[0].text = label
-                summary_table.rows[i].cells[1].text = value
-                summary_table.rows[i].cells[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-                if label in ("FEE TRUST ACCOUNT", "EXPENSE TRUST ACCOUNT", "Fee Trust Balance:", "Expense Trust Balance:", "Combined Trust Balance:"):
-                    for paragraph in summary_table.rows[i].cells[0].paragraphs:
-                        for run in paragraph.runs:
-                            run.bold = True
-                    if value:
-                        for paragraph in summary_table.rows[i].cells[1].paragraphs:
-                            for run in paragraph.runs:
-                                run.bold = True
-            self.remove_paragraph_spacing_in_table(summary_table)
-
-        elif reconciliation['transfer_amount'] > 0:
-            if reconciliation['transfer_direction'] == 'expense_to_fee':
-                transfer_label = "Transfer from Expense to Fee Trust:"
-            else:
-                transfer_label = "Transfer from Fee to Expense Trust:"
-
-            rows_data = [
-                ("FEE TRUST ACCOUNT", ""),
-                ("Total Fee Payments Received:", f"${trust_data['total_fee_payments']:.2f}"),
-                ("Total Fees Billed:", f"(${trust_data['total_fees_billed']:.2f})"),
-                ("Fee Trust Balance:", f"${fee_balance:.2f}"),
-                ("", ""),
-                ("EXPENSE TRUST ACCOUNT", ""),
-                ("Total Expense Payments Received:", f"${trust_data['total_expense_payments']:.2f}"),
-                ("Total Expenses Billed:", f"(${trust_data['total_expenses_billed']:.2f})"),
-                ("Expense Trust Balance:", f"${expense_balance:.2f}"),
-                ("", ""),
-                (transfer_label, f"${reconciliation['transfer_amount']:.2f}"),
-                ("", ""),
-                ("Adjusted Fee Trust Balance:", f"${reconciliation['adjusted_fee_balance']:.2f}"),
-                ("Fee Trust Target:", f"${fee_target:.2f}"),
-                ("Fee Replenishment Required:", f"${reconciliation['fee_replenishment']:.2f}"),
-                ("", ""),
-                ("Adjusted Expense Trust Balance:", f"${reconciliation['adjusted_expense_balance']:.2f}"),
-                ("Expense Trust Target:", f"${expense_target:.2f}"),
-                ("Expense Replenishment Required:", f"${reconciliation['expense_replenishment']:.2f}"),
-            ]
-
-            summary_table = doc.add_table(rows=len(rows_data), cols=2)
-            summary_table.style = 'Table Grid'
-            summary_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-
-            for i, (label, value) in enumerate(rows_data):
-                summary_table.rows[i].cells[0].text = label
-                summary_table.rows[i].cells[1].text = value
-                summary_table.rows[i].cells[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-                if label in ("FEE TRUST ACCOUNT", "EXPENSE TRUST ACCOUNT", "Fee Trust Balance:", "Expense Trust Balance:", "Fee Replenishment Required:", "Expense Replenishment Required:"):
-                    for paragraph in summary_table.rows[i].cells[0].paragraphs:
-                        for run in paragraph.runs:
-                            run.bold = True
-                    if value:
-                        for paragraph in summary_table.rows[i].cells[1].paragraphs:
-                            for run in paragraph.runs:
-                                run.bold = True
-            self.remove_paragraph_spacing_in_table(summary_table)
-        else:
-            rows_data = [
-                ("FEE TRUST ACCOUNT", ""),
-                ("Total Fee Payments Received:", f"${trust_data['total_fee_payments']:.2f}"),
-                ("Total Fees Billed:", f"(${trust_data['total_fees_billed']:.2f})"),
-                ("Fee Trust Balance:", f"${fee_balance:.2f}"),
-                ("Fee Trust Target:", f"${fee_target:.2f}"),
-                ("Fee Replenishment Required:", f"${reconciliation['fee_replenishment']:.2f}"),
-                ("", ""),
-                ("EXPENSE TRUST ACCOUNT", ""),
-                ("Total Expense Payments Received:", f"${trust_data['total_expense_payments']:.2f}"),
-                ("Total Expenses Billed:", f"(${trust_data['total_expenses_billed']:.2f})"),
-                ("Expense Trust Balance:", f"${expense_balance:.2f}"),
-                ("Expense Trust Target:", f"${expense_target:.2f}"),
-                ("Expense Replenishment Required:", f"${reconciliation['expense_replenishment']:.2f}"),
-            ]
-
-            summary_table = doc.add_table(rows=len(rows_data), cols=2)
-            summary_table.style = 'Table Grid'
-            summary_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-
-            for i, (label, value) in enumerate(rows_data):
-                summary_table.rows[i].cells[0].text = label
-                summary_table.rows[i].cells[1].text = value
-                summary_table.rows[i].cells[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-                if label in ("FEE TRUST ACCOUNT", "EXPENSE TRUST ACCOUNT", "Fee Trust Balance:", "Expense Trust Balance:", "Fee Replenishment Required:", "Expense Replenishment Required:"):
-                    for paragraph in summary_table.rows[i].cells[0].paragraphs:
-                        for run in paragraph.runs:
-                            run.bold = True
-                    if value:
-                        for paragraph in summary_table.rows[i].cells[1].paragraphs:
-                            for run in paragraph.runs:
-                                run.bold = True
-            self.remove_paragraph_spacing_in_table(summary_table)
+        rows_data = self._build_summary_rows(trust_data, fee_balance, expense_balance, fee_target, expense_target, reconciliation)
+        self._create_summary_table(doc, rows_data)
 
         add_paragraph_no_spacing(doc)
         add_paragraph_no_spacing(doc, f"TOTAL AMOUNT DUE: ${reconciliation['total_due']:.2f}", WD_ALIGN_PARAGRAPH.RIGHT, bold=True, font_size=Pt(14))

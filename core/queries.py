@@ -90,6 +90,18 @@ class CaseQueries(BaseQueries[Case]):
     columns = CASE_COLUMNS
     order_by = "created_at DESC"
 
+    def _build_case_query(self, select_clause: str, include_closed: bool, order_by: str) -> str:
+        query = f"""
+            SELECT {select_clause}
+            FROM cases c
+            LEFT JOIN case_people cp ON c.id = cp.case_id AND cp.role = 'client'
+            LEFT JOIN people p ON cp.person_id = p.id
+        """
+        if not include_closed:
+            query += " WHERE c.status = 'Open'"
+        query += f" ORDER BY {order_by}"
+        return query
+
     def generate_matter_number(self, last_name: str) -> str:
         clean_name = "".join(c for c in last_name if c.isalnum())
         if not clean_name:
@@ -126,12 +138,10 @@ class CaseQueries(BaseQueries[Case]):
 
     def create_with_client(self, case: Case, client_id: int, party_designation: str = None) -> int:
         case_id = self.create(case)
-
         self.db.execute("""
             INSERT INTO case_people (case_id, person_id, role, party_designation)
             VALUES (?, ?, 'client', ?)
         """, (case_id, client_id, party_designation))
-
         return case_id
 
     def update(self, case: Case):
@@ -141,74 +151,26 @@ class CaseQueries(BaseQueries[Case]):
         """, (case.case_number, case.case_name, case.is_litigation, case.court_type, case.county, case.status, case.billing_rate_cents, case.id))
 
     def get_all_with_client(self, include_closed: bool = True) -> List[dict]:
-        if include_closed:
-            query = """
-                SELECT c.id, c.case_number, c.case_name, c.is_litigation, c.court_type, c.county, 
-                       c.status, c.billing_rate_cents, c.created_at,
-                       p.first_name || ' ' || p.last_name as client_name,
-                       p.id as client_id
-                FROM cases c
-                LEFT JOIN case_people cp ON c.id = cp.case_id AND cp.role = 'client'
-                LEFT JOIN people p ON cp.person_id = p.id
-                ORDER BY c.created_at DESC
-            """
-            rows = self.db.fetchall(query)
-        else:
-            query = """
-                SELECT c.id, c.case_number, c.case_name, c.is_litigation, c.court_type, c.county, 
-                       c.status, c.billing_rate_cents, c.created_at,
-                       p.first_name || ' ' || p.last_name as client_name,
-                       p.id as client_id
-                FROM cases c
-                LEFT JOIN case_people cp ON c.id = cp.case_id AND cp.role = 'client'
-                LEFT JOIN people p ON cp.person_id = p.id
-                WHERE c.status = 'Open'
-                ORDER BY c.created_at DESC
-            """
-            rows = self.db.fetchall(query)
-        return [dict(row) for row in rows]
-
-    def get_open_matters_with_client(self) -> List[dict]:
-        rows = self.db.fetchall("""
-            SELECT c.id, c.case_number, c.case_name, c.is_litigation, c.court_type, 
-                   c.county, c.status, c.billing_rate_cents,
-                   p.first_name || ' ' || p.last_name as client_name
-            FROM cases c
-            LEFT JOIN case_people cp ON c.id = cp.case_id AND cp.role = 'client'
-            LEFT JOIN people p ON cp.person_id = p.id
-            WHERE c.status = 'Open'
-            ORDER BY c.created_at DESC
-        """)
+        select_clause = """
+            c.id, c.case_number, c.case_name, c.is_litigation, c.court_type, c.county, 
+            c.status, c.billing_rate_cents, c.created_at,
+            p.first_name || ' ' || p.last_name as client_name,
+            p.id as client_id
+        """
+        query = self._build_case_query(select_clause, include_closed, "c.created_at DESC")
+        rows = self.db.fetchall(query)
         return [dict(row) for row in rows]
 
     def get_matters_for_invoice(self, include_closed: bool = True) -> List[dict]:
-        if include_closed:
-            query = """
-                SELECT c.id, c.case_name, c.case_number, c.billing_rate_cents,
-                       c.is_litigation, c.court_type, c.county, c.status,
-                       p.first_name, p.last_name, p.address, p.email,
-                       p.id as client_id,
-                       p.first_name || ' ' || p.last_name as client_name
-                FROM cases c
-                LEFT JOIN case_people cp ON c.id = cp.case_id AND cp.role = 'client'
-                LEFT JOIN people p ON cp.person_id = p.id
-                ORDER BY c.case_name
-            """
-            rows = self.db.fetchall(query)
-        else:
-            query = """
-                SELECT c.id, c.case_name, c.case_number, c.billing_rate_cents,
-                       c.is_litigation, c.court_type, c.county, c.status,
-                       p.first_name, p.last_name, p.address, p.email,
-                       p.id as client_id,
-                       p.first_name || ' ' || p.last_name as client_name
-                FROM cases c
-                LEFT JOIN case_people cp ON c.id = cp.case_id AND cp.role = 'client'
-                LEFT JOIN people p ON cp.person_id = p.id
-                WHERE c.status = 'Open'
-                ORDER BY c.case_name
-            """
-            rows = self.db.fetchall(query)
+        select_clause = """
+            c.id, c.case_name, c.case_number, c.billing_rate_cents,
+            c.is_litigation, c.court_type, c.county, c.status,
+            p.first_name, p.last_name, p.address, p.email,
+            p.id as client_id,
+            p.first_name || ' ' || p.last_name as client_name
+        """
+        query = self._build_case_query(select_clause, include_closed, "c.case_name")
+        rows = self.db.fetchall(query)
         return [dict(row) for row in rows]
 
     def get_by_client(self, client_id: int) -> List[dict]:
