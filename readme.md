@@ -7,7 +7,7 @@ A clean, intuitive desktop application for solo practitioners and small law firm
 ### Option 1: Run from Source
 
 ```
-pip install pyside6 pandas python-docx
+pip install pyside6 python-docx
 ```
 ```
 python main.py
