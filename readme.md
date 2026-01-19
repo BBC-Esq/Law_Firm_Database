@@ -16,17 +16,3 @@ python main.py
 ## 💾 Data Storage
 
 All data is stored in a SQLite database (`law_billing.db`) located in the same directory as the application. Back up this file regularly to protect your data.
-
----
-
-
-## 🔧 Building the Executable
-
-To create a standalone Windows executable:
-
-```bash
-pip install pyinstaller
-pyinstaller --onefile --noconsole --name "LawBilling" main.py
-```
-
-The executable will be created in the `dist` folder.
