@@ -1,15 +1,16 @@
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QFormLayout, QDoubleSpinBox,
-    QDialogButtonBox, QDateEdit, QTextEdit, QMessageBox, QCheckBox, QLabel
+    QDialogButtonBox, QMessageBox, QCheckBox, QLabel
 )
 from PySide6.QtCore import QDate
 from core.models import BillingEntry
 from core.queries import CaseQueries
+from core.utils import qdate_to_date
+from gui.dialogs.dialog_helpers import DialogFieldsMixin
 from gui.utils import select_all_on_focus
-from datetime import date
 
 
-class BillingDialog(QDialog):
+class BillingDialog(QDialog, DialogFieldsMixin):
     def __init__(self, parent=None, case_queries: CaseQueries = None,
                  entry: BillingEntry = None, case_id: int = None,
                  billing_rate_cents: int = 30000):
@@ -22,7 +23,6 @@ class BillingDialog(QDialog):
         self.setWindowTitle("Edit Billing Entry" if entry else "Add Billing Entry")
         self.setMinimumWidth(400)
         self.setup_ui()
-
         if entry:
             self.load_entry()
 
@@ -30,15 +30,12 @@ class BillingDialog(QDialog):
         layout = QVBoxLayout(self)
         form = QFormLayout()
 
-        self.date_edit = QDateEdit()
-        self.date_edit.setCalendarPopup(True)
-        self.date_edit.setDate(QDate.currentDate())
-        form.addRow("Date:", self.date_edit)
+        self.date_edit = self.create_date_field(form)
+        self.expense_checkbox = self.create_checkbox(
+            form, "This is an expense (not billable time)", self.on_expense_toggled
+        )
 
-        self.expense_checkbox = QCheckBox("This is an expense (not billable time)")
-        self.expense_checkbox.toggled.connect(self.on_expense_toggled)
-        form.addRow("", self.expense_checkbox)
-
+        # Hours field - create manually to control label visibility
         self.hours_label = QLabel("Hours:")
         self.hours_spin = QDoubleSpinBox()
         self.hours_spin.setRange(0.0, 24.0)
@@ -49,30 +46,28 @@ class BillingDialog(QDialog):
         select_all_on_focus(self.hours_spin)
         form.addRow(self.hours_label, self.hours_spin)
 
+        # Amount field - create manually to control label visibility
         self.amount_label = QLabel("Amount:")
         self.amount_spin = QDoubleSpinBox()
-        self.amount_spin.setRange(0.01, 100000.00)
-        self.amount_spin.setSingleStep(1.00)
+        self.amount_spin.setRange(0.01, 100000.0)
+        self.amount_spin.setSingleStep(1.0)
         self.amount_spin.setDecimals(2)
         self.amount_spin.setPrefix("$")
         self.amount_spin.setValue(0.01)
         self.amount_spin.valueChanged.connect(self.update_amount_preview)
         select_all_on_focus(self.amount_spin)
+        form.addRow(self.amount_label, self.amount_spin)
         self.amount_label.hide()
         self.amount_spin.hide()
-        form.addRow(self.amount_label, self.amount_spin)
 
-        self.preview_label = QLabel()
+        self.preview_label = self.create_preview_label(form)
         self.update_amount_preview()
-        form.addRow("Total:", self.preview_label)
 
-        self.description_edit = QTextEdit()
-        self.description_edit.setMaximumHeight(100)
-        self.description_edit.setPlaceholderText("Enter description of work performed or expense details...")
-        form.addRow("Description:", self.description_edit)
+        self.description_edit = self.create_description_field(
+            form, placeholder="Enter description of work performed or expense details..."
+        )
 
         layout.addLayout(form)
-
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.validate_and_accept)
         buttons.rejected.connect(self.reject)
@@ -88,30 +83,23 @@ class BillingDialog(QDialog):
 
     def update_amount_preview(self):
         if self.expense_checkbox.isChecked():
-            amount = self.amount_spin.value()
-            self.preview_label.setText(f"${amount:.2f}")
+            self.preview_label.setText(f"${self.amount_spin.value():.2f}")
         else:
             hours = self.hours_spin.value()
             rate = self.billing_rate_cents / 100.0
-            total = hours * rate
-            self.preview_label.setText(f"${total:.2f} ({hours:.1f} hrs × ${rate:.2f}/hr)")
+            self.preview_label.setText(f"${hours * rate:.2f} ({hours:.1f} hrs × ${rate:.2f}/hr)")
 
     def load_entry(self):
         if self.entry.entry_date:
-            self.date_edit.setDate(QDate(
-                self.entry.entry_date.year,
-                self.entry.entry_date.month,
-                self.entry.entry_date.day
-            ))
+            d = self.entry.entry_date
+            self.date_edit.setDate(QDate(d.year, d.month, d.day))
 
         if self.entry.is_expense:
             self.expense_checkbox.setChecked(True)
             if self.entry.amount_cents:
                 self.amount_spin.setValue(self.entry.amount_cents / 100.0)
-        else:
-            self.expense_checkbox.setChecked(False)
-            if self.entry.hours:
-                self.hours_spin.setValue(self.entry.hours)
+        elif self.entry.hours:
+            self.hours_spin.setValue(self.entry.hours)
 
         self.description_edit.setText(self.entry.description or "")
 
@@ -121,32 +109,19 @@ class BillingDialog(QDialog):
                 QMessageBox.warning(self, "Validation Error", "Please enter an amount greater than zero.")
                 self.amount_spin.setFocus()
                 return
-        else:
-            if self.hours_spin.value() < 0:
-                QMessageBox.warning(self, "Validation Error", "Please enter hours zero or greater.")
-                self.hours_spin.setFocus()
-                return
-
+        elif self.hours_spin.value() < 0:
+            QMessageBox.warning(self, "Validation Error", "Please enter hours zero or greater.")
+            self.hours_spin.setFocus()
+            return
         self.accept()
 
     def get_entry(self) -> BillingEntry:
-        qdate = self.date_edit.date()
-        entry_date = date(qdate.year(), qdate.month(), qdate.day())
-
         is_expense = self.expense_checkbox.isChecked()
-
-        if is_expense:
-            hours = None
-            amount_cents = int(round(self.amount_spin.value() * 100))
-        else:
-            hours = self.hours_spin.value()
-            amount_cents = None
-
         return BillingEntry(
             case_id=self.case_id,
-            entry_date=entry_date,
-            hours=hours,
+            entry_date=qdate_to_date(self.date_edit.date()),
+            hours=None if is_expense else self.hours_spin.value(),
             is_expense=is_expense,
-            amount_cents=amount_cents,
+            amount_cents=int(round(self.amount_spin.value() * 100)) if is_expense else None,
             description=self.description_edit.toPlainText().strip()
         )

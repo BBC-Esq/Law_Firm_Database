@@ -1,21 +1,24 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QMessageBox, QLabel, QGroupBox, QTableWidget, QTableWidgetItem,
-    QSplitter, QFrame, QHeaderView
+    QSplitter, QFrame
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QBrush
 from datetime import date
 from core.models import BillingEntry
 from core.queries import BillingQueries, CaseQueries, PersonQueries, PaymentQueries, CasePersonQueries
+from core.utils import format_matter_display
 from gui.dialogs.billing_dialog import BillingDialog
 from gui.dialogs.payment_dialog import PaymentDialog
 from gui.widgets.styled_combo_box import StyledComboBox
-from gui.widgets.base_table_widget import get_selected_row_id, TooltipTableWidgetItem
-from gui.utils import show_table_context_menu
+from gui.widgets.base_table_widget import get_selected_row_id, configure_billing_table
+from gui.utils import show_table_context_menu, format_currency_balance, load_combo_with_items
 
 
 class MatterBillingWidget(QWidget):
+
+    BILLING_HEADERS = ["ID", "Date", "Type", "Hours", "Amount", "Description"]
+    PAYMENT_HEADERS = ["ID", "Date", "Fees", "Expenses", "Total", "Description"]
 
     def __init__(self, billing_queries: BillingQueries, payment_queries: PaymentQueries,
                  case_queries: CaseQueries, person_queries: PersonQueries,
@@ -33,9 +36,40 @@ class MatterBillingWidget(QWidget):
         self.load_matters_combo()
         self.update_grand_totals()
 
+    def _create_balance_display(self, layout, label_text, is_large=False):
+        """Create a label pair for balance display."""
+        layout.addWidget(QLabel(f"{label_text}:"))
+        value_label = QLabel("$0.00" if ":" not in label_text else "--")
+        style = "font-weight: bold;"
+        if is_large:
+            style += " font-size: 14px;"
+        value_label.setStyleSheet(style)
+        layout.addWidget(value_label)
+        return value_label
+
+    def _create_table_group(self, title, headers, add_text, add_callback,
+                            edit_callback, context_callback):
+        group = QGroupBox(title)
+        layout = QVBoxLayout(group)
+
+        btn_layout = QHBoxLayout()
+        add_btn = QPushButton(add_text)
+        add_btn.setEnabled(False)
+        add_btn.clicked.connect(add_callback)
+        btn_layout.addWidget(add_btn)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        table = QTableWidget()
+        configure_billing_table(table, headers)
+        table.doubleClicked.connect(edit_callback)
+        table.customContextMenuRequested.connect(context_callback)
+        layout.addWidget(table)
+
+        return group, table, add_btn
+
     def setup_ui(self):
         layout = QVBoxLayout(self)
-
         font = self.font()
         font.setPointSize(12)
         self.setFont(font)
@@ -46,30 +80,14 @@ class MatterBillingWidget(QWidget):
         self.matter_combo.setMinimumWidth(400)
         self.matter_combo.currentIndexChanged.connect(self.on_matter_selected)
         selection_layout.addWidget(self.matter_combo)
-
         selection_layout.addSpacing(30)
-
         selection_layout.addWidget(QLabel("All Matters —"))
-
-        selection_layout.addWidget(QLabel("Fees:"))
-        self.grand_fees_label = QLabel("$0.00")
-        self.grand_fees_label.setStyleSheet("font-weight: bold;")
-        selection_layout.addWidget(self.grand_fees_label)
-
+        
+        self.grand_fees_label = self._create_balance_display(selection_layout, "Fees")
         selection_layout.addSpacing(10)
-
-        selection_layout.addWidget(QLabel("Expenses:"))
-        self.grand_expenses_label = QLabel("$0.00")
-        self.grand_expenses_label.setStyleSheet("font-weight: bold;")
-        selection_layout.addWidget(self.grand_expenses_label)
-
+        self.grand_expenses_label = self._create_balance_display(selection_layout, "Expenses")
         selection_layout.addSpacing(10)
-
-        selection_layout.addWidget(QLabel("Total:"))
-        self.grand_total_label = QLabel("$0.00")
-        self.grand_total_label.setStyleSheet("font-weight: bold;")
-        selection_layout.addWidget(self.grand_total_label)
-
+        self.grand_total_label = self._create_balance_display(selection_layout, "Total")
         selection_layout.addStretch()
         layout.addLayout(selection_layout)
 
@@ -80,97 +98,32 @@ class MatterBillingWidget(QWidget):
         self.client_label = QLabel("Client: --")
         self.client_label.setStyleSheet("font-weight: bold;")
         info_layout.addWidget(self.client_label)
-
         self.matter_label = QLabel("Matter: --")
         info_layout.addWidget(self.matter_label)
-
         self.rate_label = QLabel("Rate: --")
         info_layout.addWidget(self.rate_label)
-
         info_layout.addSpacing(20)
 
-        info_layout.addWidget(QLabel("Fees:"))
-        self.fee_balance_label = QLabel("--")
-        self.fee_balance_label.setStyleSheet("font-weight: bold;")
-        info_layout.addWidget(self.fee_balance_label)
-
+        self.fee_balance_label = self._create_balance_display(info_layout, "Fees")
         info_layout.addSpacing(10)
-
-        info_layout.addWidget(QLabel("Expenses:"))
-        self.expense_balance_label = QLabel("--")
-        self.expense_balance_label.setStyleSheet("font-weight: bold;")
-        info_layout.addWidget(self.expense_balance_label)
-
+        self.expense_balance_label = self._create_balance_display(info_layout, "Expenses")
         info_layout.addSpacing(10)
-
-        info_layout.addWidget(QLabel("Total:"))
-        self.total_balance_label = QLabel("--")
-        self.total_balance_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        info_layout.addWidget(self.total_balance_label)
-
+        self.total_balance_label = self._create_balance_display(info_layout, "Total", is_large=True)
         info_layout.addStretch()
         layout.addWidget(self.info_frame)
 
         splitter = QSplitter(Qt.Vertical)
 
-        billing_group = QGroupBox("Billing Entries")
-        billing_layout = QVBoxLayout(billing_group)
-
-        billing_btn_layout = QHBoxLayout()
-        self.add_billing_btn = QPushButton("Add Entry")
-        self.add_billing_btn.setEnabled(False)
-        self.add_billing_btn.clicked.connect(self.add_billing_entry)
-        billing_btn_layout.addWidget(self.add_billing_btn)
-        billing_btn_layout.addStretch()
-        billing_layout.addLayout(billing_btn_layout)
-
-        self.billing_table = QTableWidget()
-        self.billing_table.setColumnCount(6)
-        self.billing_table.setHorizontalHeaderLabels(["ID", "Date", "Type", "Hours", "Amount", "Description"])
-        self.billing_table.setColumnHidden(0, True)
-        self.billing_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.billing_table.setSelectionMode(QTableWidget.SingleSelection)
-        self.billing_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.billing_table.setAlternatingRowColors(True)
-        self.billing_table.setWordWrap(True)
-        self.billing_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        self.billing_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        self.billing_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
-        self.billing_table.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.billing_table.doubleClicked.connect(self.edit_billing_entry)
-        self.billing_table.customContextMenuRequested.connect(self.show_billing_context_menu)
-        billing_layout.addWidget(self.billing_table)
-
+        billing_group, self.billing_table, self.add_billing_btn = self._create_table_group(
+            "Billing Entries", self.BILLING_HEADERS, "Add Entry",
+            self.add_billing_entry, self.edit_billing_entry, self.show_billing_context_menu
+        )
         splitter.addWidget(billing_group)
 
-        payment_group = QGroupBox("Payments")
-        payment_layout = QVBoxLayout(payment_group)
-
-        payment_btn_layout = QHBoxLayout()
-        self.add_payment_btn = QPushButton("Add Payment")
-        self.add_payment_btn.setEnabled(False)
-        self.add_payment_btn.clicked.connect(self.add_payment)
-        payment_btn_layout.addWidget(self.add_payment_btn)
-        payment_btn_layout.addStretch()
-        payment_layout.addLayout(payment_btn_layout)
-
-        self.payment_table = QTableWidget()
-        self.payment_table.setColumnCount(6)
-        self.payment_table.setHorizontalHeaderLabels(["ID", "Date", "Fees", "Expenses", "Total", "Description"])
-        self.payment_table.setColumnHidden(0, True)
-        self.payment_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.payment_table.setSelectionMode(QTableWidget.SingleSelection)
-        self.payment_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.payment_table.setAlternatingRowColors(True)
-        self.payment_table.setWordWrap(True)
-        self.payment_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        self.payment_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        self.payment_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
-        self.payment_table.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.payment_table.doubleClicked.connect(self.edit_payment)
-        self.payment_table.customContextMenuRequested.connect(self.show_payment_context_menu)
-        payment_layout.addWidget(self.payment_table)
-
+        payment_group, self.payment_table, self.add_payment_btn = self._create_table_group(
+            "Payments", self.PAYMENT_HEADERS, "Add Payment",
+            self.add_payment, self.edit_payment, self.show_payment_context_menu
+        )
         splitter.addWidget(payment_group)
 
         layout.addWidget(splitter, 1)
@@ -184,22 +137,44 @@ class MatterBillingWidget(QWidget):
             ("Duplicate with Today's Date", self.duplicate_billing_entry)
         ]
 
+        entries = self.billing_queries.get_entries_on_same_date(entry_id)
+        if len(entries) > 1:
+            current_idx = None
+            for i, e in enumerate(entries):
+                if e['id'] == entry_id:
+                    current_idx = i
+                    break
+
+            if current_idx is not None:
+                if current_idx > 0:
+                    extra_actions.append(("Move Up (within same date)", self.move_billing_entry_up))
+                if current_idx < len(entries) - 1:
+                    extra_actions.append(("Move Down (within same date)", self.move_billing_entry_down))
+
         show_table_context_menu(
-            self.billing_table,
-            position,
+            self.billing_table, position,
             edit_callback=self.edit_billing_entry,
             delete_callback=self.delete_billing_entry,
             extra_actions=extra_actions
         )
 
-    def show_payment_context_menu(self, position):
-        payment_id = self.get_selected_payment_id()
-        if not payment_id:
-            return
+    def move_billing_entry_up(self):
+        entry_id = self.get_selected_billing_id()
+        if entry_id:
+            if self.billing_queries.move_entry_up(entry_id):
+                self.load_billing_entries()
 
+    def move_billing_entry_down(self):
+        entry_id = self.get_selected_billing_id()
+        if entry_id:
+            if self.billing_queries.move_entry_down(entry_id):
+                self.load_billing_entries()
+
+    def show_payment_context_menu(self, position):
+        if not self.get_selected_payment_id():
+            return
         show_table_context_menu(
-            self.payment_table,
-            position,
+            self.payment_table, position,
             edit_callback=self.edit_payment,
             delete_callback=self.delete_payment
         )
@@ -208,128 +183,62 @@ class MatterBillingWidget(QWidget):
         entry_id = self.get_selected_billing_id()
         if not entry_id:
             return
-
         entry = self.billing_queries.get_by_id(entry_id)
         if entry:
             new_entry = BillingEntry(
-                case_id=entry.case_id,
-                entry_date=date.today(),
-                hours=entry.hours,
-                is_expense=entry.is_expense,
-                amount_cents=entry.amount_cents,
-                description=entry.description
+                case_id=entry.case_id, entry_date=date.today(),
+                hours=entry.hours, is_expense=entry.is_expense,
+                amount_cents=entry.amount_cents, description=entry.description
             )
             self.billing_queries.create(new_entry)
-            self.load_billing_entries()
-            self.update_matter_totals()
-            self.update_grand_totals()
-
-    def format_balance(self, amount_cents: int) -> tuple:
-        amount = abs(amount_cents) / 100.0
-        text = f"${amount:.2f}"
-
-        if amount_cents > 0:
-            style = "font-weight: bold; color: green;"
-        elif amount_cents < 0:
-            style = "font-weight: bold; color: red;"
-        else:
-            style = "font-weight: bold; color: yellow;"
-
-        return text, style
-
-    def format_balance_large(self, amount_cents: int) -> tuple:
-        amount = abs(amount_cents) / 100.0
-        text = f"${amount:.2f}"
-
-        if amount_cents > 0:
-            style = "font-weight: bold; font-size: 14px; color: green;"
-        elif amount_cents < 0:
-            style = "font-weight: bold; font-size: 14px; color: red;"
-        else:
-            style = "font-weight: bold; font-size: 14px; color: yellow;"
-
-        return text, style
+            self._refresh_after_change()
 
     def load_matters_combo(self):
-        self.matter_combo.clear()
-        self.matter_combo.addItem("-- Select a Client Matter --", None)
-
         matters = self.case_queries.get_all_with_client()
-
-        for matter in matters:
-            client_name = matter.get('client_name') or 'No Client'
-            matter_name = matter.get('case_name') or ''
-
-            if matter.get('is_litigation'):
-                county = matter.get('county') or ''
-                court_type = matter.get('court_type') or ''
-                case_number = matter.get('case_number') or ''
-                
-                court_display = f"{county} County {court_type}" if county and court_type else (court_type or county or 'Litigation')
-                
-                if case_number:
-                    display = f"{client_name} - {matter_name} - {court_display} ({case_number})"
-                else:
-                    display = f"{client_name} - {matter_name} - {court_display}"
-            else:
-                display = f"{client_name} - {matter_name} - Non-Litigation"
-
-            self.matter_combo.addItem(display, matter)
+        load_combo_with_items(
+            self.matter_combo, matters,
+            lambda m: (format_matter_display(m, include_client=True), m),
+            "-- Select a Client Matter --"
+        )
 
     def update_button_states(self, enabled: bool):
         self.add_billing_btn.setEnabled(enabled)
         self.add_payment_btn.setEnabled(enabled)
 
-    def update_grand_totals(self):
+    def _calculate_all_balances(self):
         matters = self.case_queries.get_all_with_client()
-
-        total_fees_balance = 0
-        total_expenses_balance = 0
+        total_fees, total_expenses = 0, 0
 
         for matter in matters:
             case_id = matter.get('id')
             if case_id:
-                billing_totals = self.billing_queries.get_case_totals(case_id)
-                payment_totals = self.payment_queries.get_case_payment_totals(case_id)
+                bt = self.billing_queries.get_case_totals(case_id)
+                pt = self.payment_queries.get_case_payment_totals(case_id)
+                total_fees += (pt.get("total_fee_payments_cents", 0) - bt.get("total_time_cents", 0))
+                total_expenses += (pt.get("total_expense_payments_cents", 0) - bt.get("total_expense_cents", 0))
 
-                fee_billed = billing_totals.get("total_time_cents") or 0
-                fee_paid = payment_totals.get("total_fee_payments_cents") or 0
-                total_fees_balance += (fee_paid - fee_billed)
+        return total_fees, total_expenses
 
-                expense_incurred = billing_totals.get("total_expense_cents") or 0
-                expense_paid = payment_totals.get("total_expense_payments_cents") or 0
-                total_expenses_balance += (expense_paid - expense_incurred)
-
-        grand_total = total_fees_balance + total_expenses_balance
-
-        text, style = self.format_balance(total_fees_balance)
-        self.grand_fees_label.setText(text)
-        self.grand_fees_label.setStyleSheet(style)
-
-        text, style = self.format_balance(total_expenses_balance)
-        self.grand_expenses_label.setText(text)
-        self.grand_expenses_label.setStyleSheet(style)
-
-        text, style = self.format_balance(grand_total)
-        self.grand_total_label.setText(text)
-        self.grand_total_label.setStyleSheet(style)
+    def update_grand_totals(self):
+        fees, expenses = self._calculate_all_balances()
+        for label, value in [(self.grand_fees_label, fees), 
+                             (self.grand_expenses_label, expenses),
+                             (self.grand_total_label, fees + expenses)]:
+            text, style = format_currency_balance(value)
+            label.setText(text)
+            label.setStyleSheet(style)
 
     def on_matter_selected(self, index):
         matter = self.matter_combo.currentData()
 
         if not matter:
-            self.selected_matter = None
-            self.selected_client_id = None
+            self.selected_matter = self.selected_client_id = None
             self.billing_rate_cents = 0
-            self.client_label.setText("Client: --")
-            self.matter_label.setText("Matter: --")
-            self.rate_label.setText("Rate: --")
-            self.fee_balance_label.setText("--")
-            self.fee_balance_label.setStyleSheet("font-weight: bold;")
-            self.expense_balance_label.setText("--")
-            self.expense_balance_label.setStyleSheet("font-weight: bold;")
-            self.total_balance_label.setText("--")
-            self.total_balance_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+            for label in [self.client_label, self.matter_label, self.rate_label]:
+                label.setText(label.text().split(":")[0] + ": --")
+            for label in [self.fee_balance_label, self.expense_balance_label, self.total_balance_label]:
+                label.setText("--")
+                label.setStyleSheet("font-weight: bold;")
             self.billing_table.setRowCount(0)
             self.payment_table.setRowCount(0)
             self.update_button_states(False)
@@ -339,17 +248,11 @@ class MatterBillingWidget(QWidget):
         self.selected_client_id = matter.get('client_id')
         self.billing_rate_cents = matter.get('billing_rate_cents') or 0
 
-        client_name = matter.get('client_name') or 'No Client'
-        matter_name = matter.get('case_name') or ''
-        case_number = matter.get('case_number') or ''
-
-        self.client_label.setText(f"Client: {client_name}")
-
-        matter_display = matter_name
-        if case_number:
-            matter_display += f" ({case_number})"
+        self.client_label.setText(f"Client: {matter.get('client_name') or 'No Client'}")
+        matter_display = matter.get('case_name') or ''
+        if matter.get('case_number'):
+            matter_display += f" ({matter['case_number']})"
         self.matter_label.setText(f"Matter: {matter_display}")
-
         self.rate_label.setText(f"Rate: ${self.billing_rate_cents / 100:.2f}/hr")
 
         self.update_button_states(True)
@@ -361,119 +264,82 @@ class MatterBillingWidget(QWidget):
         if not self.selected_matter:
             return
 
-        billing_totals = self.billing_queries.get_case_totals(self.selected_matter["id"])
-        payment_totals = self.payment_queries.get_case_payment_totals(self.selected_matter["id"])
+        bt = self.billing_queries.get_case_totals(self.selected_matter["id"])
+        pt = self.payment_queries.get_case_payment_totals(self.selected_matter["id"])
 
-        fee_billed = billing_totals.get("total_time_cents") or 0
-        expense_incurred = billing_totals.get("total_expense_cents") or 0
+        fee_balance = pt.get("total_fee_payments_cents", 0) - bt.get("total_time_cents", 0)
+        expense_balance = pt.get("total_expense_payments_cents", 0) - bt.get("total_expense_cents", 0)
 
-        fee_paid = payment_totals.get("total_fee_payments_cents") or 0
-        expense_paid = payment_totals.get("total_expense_payments_cents") or 0
+        for label, value, large in [(self.fee_balance_label, fee_balance, False),
+                                     (self.expense_balance_label, expense_balance, False),
+                                     (self.total_balance_label, fee_balance + expense_balance, True)]:
+            text, style = format_currency_balance(value, large)
+            label.setText(text)
+            label.setStyleSheet(style)
 
-        fee_balance = fee_paid - fee_billed
-        expense_balance = expense_paid - expense_incurred
-        total_balance = fee_balance + expense_balance
+    def _populate_billing_row(self, row, entry):
+        is_expense = entry.get("is_expense", 0)
+        hours = entry.get("hours") or 0
+        rate = (entry.get("billing_rate_cents") or self.billing_rate_cents) / 100.0
 
-        text, style = self.format_balance(fee_balance)
-        self.fee_balance_label.setText(text)
-        self.fee_balance_label.setStyleSheet(style)
+        if is_expense:
+            amount = (entry.get("amount_cents") or 0) / 100.0
+            entry_type, hours_display = "Expense", "--"
+        else:
+            amount = hours * rate
+            entry_type, hours_display = "Time", f"{hours:.1f}"
 
-        text, style = self.format_balance(expense_balance)
-        self.expense_balance_label.setText(text)
-        self.expense_balance_label.setStyleSheet(style)
-
-        text, style = self.format_balance_large(total_balance)
-        self.total_balance_label.setText(text)
-        self.total_balance_label.setStyleSheet(style)
+        items = [
+            (str(entry["id"]), None),
+            (str(entry.get("entry_date")), Qt.AlignCenter),
+            (entry_type, Qt.AlignCenter),
+            (hours_display, Qt.AlignCenter),
+            (f"${amount:.2f}", Qt.AlignCenter),
+            (entry.get("description") or "", None)
+        ]
+        for col, (text, alignment) in enumerate(items):
+            item = QTableWidgetItem(text)
+            if alignment:
+                item.setTextAlignment(alignment)
+            self.billing_table.setItem(row, col, item)
 
     def load_billing_entries(self):
         if not self.selected_matter:
             return
-
         entries = self.billing_queries.get_by_case(self.selected_matter["id"])
-        today = date.today()
-
         self.billing_table.setSortingEnabled(False)
         self.billing_table.setRowCount(len(entries))
-
         for row, entry in enumerate(entries):
-            is_expense = entry.get("is_expense", 0)
-            hours = entry.get("hours") or 0
-            rate = (entry.get("billing_rate_cents") or self.billing_rate_cents) / 100.0
-            entry_date = entry.get("entry_date")
-
-            if is_expense:
-                amount_cents = entry.get("amount_cents") or 0
-                amount = amount_cents / 100.0
-                entry_type = "Expense"
-                hours_display = "--"
-            else:
-                amount = hours * rate
-                entry_type = "Time"
-                hours_display = f"{hours:.1f}"
-
-            id_item = QTableWidgetItem(str(entry["id"]))
-            date_item = QTableWidgetItem(str(entry_date))
-            type_item = QTableWidgetItem(entry_type)
-            hours_item = QTableWidgetItem(hours_display)
-            amount_item = QTableWidgetItem(f"${amount:.2f}")
-            desc_item = QTableWidgetItem(entry.get("description") or "")
-
-            date_item.setTextAlignment(Qt.AlignCenter)
-            type_item.setTextAlignment(Qt.AlignCenter)
-            hours_item.setTextAlignment(Qt.AlignCenter)
-            amount_item.setTextAlignment(Qt.AlignCenter)
-
-            self.billing_table.setItem(row, 0, id_item)
-            self.billing_table.setItem(row, 1, date_item)
-            self.billing_table.setItem(row, 2, type_item)
-            self.billing_table.setItem(row, 3, hours_item)
-            self.billing_table.setItem(row, 4, amount_item)
-            self.billing_table.setItem(row, 5, desc_item)
-
-            if str(entry_date) == str(today):
-                highlight_color = QBrush(QColor("#2a4d3a"))
-                for col in range(self.billing_table.columnCount()):
-                    item = self.billing_table.item(row, col)
-                    if item:
-                        item.setBackground(highlight_color)
-
+            self._populate_billing_row(row, entry)
         self.billing_table.setSortingEnabled(True)
         self.billing_table.resizeRowsToContents()
+
+    def _populate_payment_row(self, row, payment):
+        fee_cents = payment.get("amount_cents") or 0
+        expense_cents = payment.get("expense_amount_cents") or 0
+        
+        items = [
+            (str(payment["id"]), None),
+            (str(payment["payment_date"]), Qt.AlignCenter),
+            (f"${fee_cents / 100:.2f}", Qt.AlignCenter),
+            (f"${expense_cents / 100:.2f}", Qt.AlignCenter),
+            (f"${(fee_cents + expense_cents) / 100:.2f}", Qt.AlignCenter),
+            (payment.get("notes") or "", None)
+        ]
+        for col, (text, alignment) in enumerate(items):
+            item = QTableWidgetItem(text)
+            if alignment:
+                item.setTextAlignment(alignment)
+            self.payment_table.setItem(row, col, item)
 
     def load_payments(self):
         if not self.selected_matter:
             return
-
         payments = self.payment_queries.get_by_case(self.selected_matter["id"])
-
         self.payment_table.setSortingEnabled(False)
         self.payment_table.setRowCount(len(payments))
-
         for row, payment in enumerate(payments):
-            fee_cents = payment.get("amount_cents") or 0
-            expense_cents = payment.get("expense_amount_cents") or 0
-            total_cents = fee_cents + expense_cents
-
-            id_item = QTableWidgetItem(str(payment["id"]))
-            date_item = QTableWidgetItem(str(payment["payment_date"]))
-            fees_item = QTableWidgetItem(f"${fee_cents / 100:.2f}")
-            expenses_item = QTableWidgetItem(f"${expense_cents / 100:.2f}")
-            total_item = QTableWidgetItem(f"${total_cents / 100:.2f}")
-            desc_item = QTableWidgetItem(payment.get("notes") or "")
-
-            date_item.setTextAlignment(Qt.AlignCenter)
-            fees_item.setTextAlignment(Qt.AlignCenter)
-            expenses_item.setTextAlignment(Qt.AlignCenter)
-            total_item.setTextAlignment(Qt.AlignCenter)
-
-            self.payment_table.setItem(row, 0, id_item)
-            self.payment_table.setItem(row, 1, date_item)
-            self.payment_table.setItem(row, 2, fees_item)
-            self.payment_table.setItem(row, 3, expenses_item)
-            self.payment_table.setItem(row, 4, total_item)
-            self.payment_table.setItem(row, 5, desc_item)
-
+            self._populate_payment_row(row, payment)
         self.payment_table.setSortingEnabled(True)
         self.payment_table.resizeRowsToContents()
 
@@ -483,130 +349,86 @@ class MatterBillingWidget(QWidget):
     def get_selected_payment_id(self):
         return get_selected_row_id(self.payment_table)
 
+    def _refresh_after_change(self):
+        self.load_billing_entries()
+        self.load_payments()
+        self.update_matter_totals()
+        self.update_grand_totals()
+
     def add_billing_entry(self):
         if not self.selected_matter:
             return
-
-        dialog = BillingDialog(
-            self,
-            self.case_queries,
-            case_id=self.selected_matter["id"],
-            billing_rate_cents=self.billing_rate_cents
-        )
-
+        dialog = BillingDialog(self, self.case_queries, case_id=self.selected_matter["id"],
+                               billing_rate_cents=self.billing_rate_cents)
         if dialog.exec():
-            entry = dialog.get_entry()
-            self.billing_queries.create(entry)
-            self.load_billing_entries()
-            self.update_matter_totals()
-            self.update_grand_totals()
+            self.billing_queries.create(dialog.get_entry())
+            self._refresh_after_change()
 
     def edit_billing_entry(self):
         entry_id = self.get_selected_billing_id()
         if not entry_id:
             return
-
         entry = self.billing_queries.get_by_id(entry_id)
         if entry:
-            dialog = BillingDialog(
-                self,
-                self.case_queries,
-                entry=entry,
-                case_id=self.selected_matter["id"],
-                billing_rate_cents=self.billing_rate_cents
-            )
+            dialog = BillingDialog(self, self.case_queries, entry=entry,
+                                   case_id=self.selected_matter["id"],
+                                   billing_rate_cents=self.billing_rate_cents)
             if dialog.exec():
-                updated_entry = dialog.get_entry()
-                updated_entry.id = entry_id
-                self.billing_queries.update(updated_entry)
-                self.load_billing_entries()
-                self.update_matter_totals()
-                self.update_grand_totals()
+                updated = dialog.get_entry()
+                updated.id = entry_id
+                self.billing_queries.update(updated)
+                self._refresh_after_change()
 
     def delete_billing_entry(self):
         entry_id = self.get_selected_billing_id()
-        if not entry_id:
-            return
-
-        reply = QMessageBox.question(
-            self, "Confirm Delete",
-            "Are you sure you want to delete this billing entry?",
+        if entry_id and QMessageBox.question(
+            self, "Confirm Delete", "Are you sure you want to delete this billing entry?",
             QMessageBox.Yes | QMessageBox.No
-        )
-
-        if reply == QMessageBox.Yes:
+        ) == QMessageBox.Yes:
             self.billing_queries.delete(entry_id)
-            self.load_billing_entries()
-            self.update_matter_totals()
-            self.update_grand_totals()
+            self._refresh_after_change()
 
     def add_payment(self):
         if not self.selected_matter or not self.selected_client_id:
             return
-
-        dialog = PaymentDialog(
-            self,
-            self.person_queries,
-            self.case_queries,
-            client_id=self.selected_client_id,
-            case_id=self.selected_matter["id"]
-        )
-
+        dialog = PaymentDialog(self, self.person_queries, self.case_queries,
+                               client_id=self.selected_client_id,
+                               case_id=self.selected_matter["id"])
         if dialog.exec():
-            payment = dialog.get_payment()
-            self.payment_queries.create(payment)
-            self.load_payments()
-            self.update_matter_totals()
-            self.update_grand_totals()
+            self.payment_queries.create(dialog.get_payment())
+            self._refresh_after_change()
 
     def edit_payment(self):
         payment_id = self.get_selected_payment_id()
         if not payment_id:
             return
-
         payment = self.payment_queries.get_by_id(payment_id)
         if payment:
-            dialog = PaymentDialog(
-                self,
-                self.person_queries,
-                self.case_queries,
-                payment=payment,
-                client_id=self.selected_client_id,
-                case_id=self.selected_matter["id"]
-            )
+            dialog = PaymentDialog(self, self.person_queries, self.case_queries,
+                                   payment=payment, client_id=self.selected_client_id,
+                                   case_id=self.selected_matter["id"])
             if dialog.exec():
-                updated_payment = dialog.get_payment()
-                updated_payment.id = payment_id
-                self.payment_queries.update(updated_payment)
-                self.load_payments()
-                self.update_matter_totals()
-                self.update_grand_totals()
+                updated = dialog.get_payment()
+                updated.id = payment_id
+                self.payment_queries.update(updated)
+                self._refresh_after_change()
 
     def delete_payment(self):
         payment_id = self.get_selected_payment_id()
-        if not payment_id:
-            return
-
-        reply = QMessageBox.question(
-            self, "Confirm Delete",
-            "Are you sure you want to delete this payment?",
+        if payment_id and QMessageBox.question(
+            self, "Confirm Delete", "Are you sure you want to delete this payment?",
             QMessageBox.Yes | QMessageBox.No
-        )
-
-        if reply == QMessageBox.Yes:
+        ) == QMessageBox.Yes:
             self.payment_queries.delete(payment_id)
-            self.load_payments()
-            self.update_matter_totals()
-            self.update_grand_totals()
+            self._refresh_after_change()
 
     def refresh(self):
-        current_matter_id = self.selected_matter["id"] if self.selected_matter else None
+        current_id = self.selected_matter["id"] if self.selected_matter else None
         self.load_matters_combo()
         self.update_grand_totals()
-
-        if current_matter_id:
+        if current_id:
             for i in range(self.matter_combo.count()):
                 matter = self.matter_combo.itemData(i)
-                if matter and matter.get("id") == current_matter_id:
+                if matter and matter.get("id") == current_id:
                     self.matter_combo.setCurrentIndex(i)
                     break

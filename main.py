@@ -1,5 +1,8 @@
 import sys
 import os
+import shutil
+from datetime import datetime
+from pathlib import Path
 from PySide6.QtWidgets import QApplication
 from gui.main_window import MainWindow
 
@@ -11,11 +14,28 @@ def get_app_path():
         return os.path.dirname(os.path.abspath(__file__))
 
 
+def auto_backup(db_path, keep_count=5):
+    if not os.path.exists(db_path):
+        return
+    
+    backup_dir = Path(db_path).parent / "backups"
+    backup_dir.mkdir(exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = backup_dir / f"law_billing_backup_{timestamp}.db"
+    shutil.copy2(db_path, backup_path)
+    
+    backups = sorted(backup_dir.glob("law_billing_backup_*.db"), reverse=True)
+    for old_backup in backups[keep_count:]:
+        old_backup.unlink()
+
+
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
     db_path = os.path.join(get_app_path(), "law_billing.db")
+    auto_backup(db_path)
 
     window = MainWindow(db_path=db_path)
     window.show()

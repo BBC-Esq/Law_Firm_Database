@@ -7,6 +7,7 @@ from core.queries import PersonQueries
 from gui.dialogs.base_dialog import BaseFormDialog
 from gui.widgets.person_form_widget import PersonFormWidget
 from gui.widgets.styled_combo_box import StyledComboBox
+from gui.utils import load_combo_with_items
 
 
 class AddPersonToCaseDialog(BaseFormDialog):
@@ -121,17 +122,19 @@ class AddPersonToCaseDialog(BaseFormDialog):
             self.person_form.firm_edit.setText(person.firm_name)
 
     def load_person_combo(self):
-        self.person_combo.clear()
-        self.person_combo.addItem("-- Select a Person --", None)
-        
-        people = self.person_queries.get_all()
-        for person in people:
+        def formatter(person):
             display = person.display_name
             if person.firm_name:
                 display += f" ({person.firm_name})"
             elif person.job_title:
                 display += f" ({person.job_title})"
-            self.person_combo.addItem(display, person)
+            return (display, person)
+        load_combo_with_items(
+            self.person_combo,
+            self.person_queries.get_all(),
+            formatter,
+            "-- Select a Person --"
+        )
 
     def set_initial_focus(self):
         if self.select_radio.isChecked():

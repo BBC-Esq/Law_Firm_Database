@@ -7,7 +7,7 @@ from core.models import Case, Person, PARTY_DESIGNATIONS, PARTY_DESIGNATION_DISP
 from core.queries import CaseQueries, PersonQueries, RecentCountyQueries
 from gui.widgets.county_combo_widget import CountyComboWidget
 from gui.widgets.styled_combo_box import StyledComboBox, select_combo_by_data
-from gui.utils import select_all_on_focus
+from gui.utils import select_all_on_focus, load_combo_with_items, set_widgets_visible
 
 
 class CaseDialog(QDialog):
@@ -158,26 +158,21 @@ class CaseDialog(QDialog):
         litigation_layout.addWidget(self.is_litigation_checkbox)
 
         self.designation_label = QLabel("Client is:")
-        self.designation_label.hide()
         litigation_layout.addWidget(self.designation_label)
         
         self.designation_combo = StyledComboBox()
         self.designation_combo.addItem("-- Select Party Designation --", None)
         for designation in PARTY_DESIGNATIONS:
             self.designation_combo.addItem(PARTY_DESIGNATION_DISPLAY[designation], designation)
-        self.designation_combo.hide()
         litigation_layout.addWidget(self.designation_combo)
 
         self.case_number_label = QLabel("Case Number:")
-        self.case_number_label.hide()
         litigation_layout.addWidget(self.case_number_label)
         self.case_number_edit = QLineEdit()
         self.case_number_edit.setPlaceholderText("e.g., 2024-CV-12345")
-        self.case_number_edit.hide()
         litigation_layout.addWidget(self.case_number_edit)
 
         self.court_type_label = QLabel("Court Type:")
-        self.court_type_label.hide()
         litigation_layout.addWidget(self.court_type_label)
         self.court_type_combo = StyledComboBox()
         self.court_type_combo.addItem("-- Select Court --", None)
@@ -185,15 +180,20 @@ class CaseDialog(QDialog):
         self.court_type_combo.addItem("Magistrate Court", "Magistrate Court")
         self.court_type_combo.addItem("State Court", "State Court")
         self.court_type_combo.addItem("Juvenile Court", "Juvenile Court")
-        self.court_type_combo.hide()
         litigation_layout.addWidget(self.court_type_combo)
 
         self.county_label = QLabel("County:")
-        self.county_label.hide()
         litigation_layout.addWidget(self.county_label)
         self.county_combo = CountyComboWidget(self.recent_county_queries)
-        self.county_combo.hide()
         litigation_layout.addWidget(self.county_combo)
+
+        self.litigation_widgets = [
+            self.designation_label, self.designation_combo,
+            self.case_number_label, self.case_number_edit,
+            self.court_type_label, self.court_type_combo,
+            self.county_label, self.county_combo
+        ]
+        set_widgets_visible(self.litigation_widgets, False)
 
         layout.addWidget(litigation_group)
 
@@ -205,25 +205,29 @@ class CaseDialog(QDialog):
         layout.setSizeConstraint(QVBoxLayout.SetFixedSize)
 
     def load_client_combo(self):
-        self.client_combo.clear()
-        self.client_combo.addItem("-- Select a Client --", None)
-        
-        clients = self.person_queries.get_all_clients()
-        for client in clients:
-            self.client_combo.addItem(client.display_name, client)
+        def formatter(client):
+            return (client.display_name, client)
+        load_combo_with_items(
+            self.client_combo,
+            self.person_queries.get_all_clients(),
+            formatter,
+            "-- Select a Client --"
+        )
 
     def load_person_combo(self):
-        self.person_combo.clear()
-        self.person_combo.addItem("-- Select a Person --", None)
-        
-        people = self.person_queries.get_all()
-        for person in people:
+        def formatter(person):
             display = person.display_name
             if person.firm_name:
                 display += f" ({person.firm_name})"
             elif person.job_title:
                 display += f" ({person.job_title})"
-            self.person_combo.addItem(display, person)
+            return (display, person)
+        load_combo_with_items(
+            self.person_combo,
+            self.person_queries.get_all(),
+            formatter,
+            "-- Select a Person --"
+        )
 
     def on_client_combo_changed(self, index):
         client = self.client_combo.currentData()
@@ -273,14 +277,7 @@ class CaseDialog(QDialog):
             self.matter_number_label.setStyleSheet("color: gray; font-style: italic;")
 
     def on_litigation_changed(self, checked):
-        self.designation_label.setVisible(checked)
-        self.designation_combo.setVisible(checked)
-        self.case_number_label.setVisible(checked)
-        self.case_number_edit.setVisible(checked)
-        self.court_type_label.setVisible(checked)
-        self.court_type_combo.setVisible(checked)
-        self.county_label.setVisible(checked)
-        self.county_combo.setVisible(checked)
+        set_widgets_visible(self.litigation_widgets, checked)
         self.adjustSize()
 
     def load_case(self):

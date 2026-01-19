@@ -1,6 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import date, datetime
 from typing import Optional
+from core.utils import parse_date, parse_datetime
 
 
 ROLE_DISPLAY_NAMES = {
@@ -16,36 +17,27 @@ ROLE_DISPLAY_NAMES = {
 }
 
 PARTY_DESIGNATIONS = ('plaintiff', 'defendant')
-
-PARTY_DESIGNATION_DISPLAY = {
-    'plaintiff': 'Plaintiff',
-    'defendant': 'Defendant'
-}
-
+PARTY_DESIGNATION_DISPLAY = {'plaintiff': 'Plaintiff', 'defendant': 'Defendant'}
 MATTER_STATUSES = ('Open', 'Closed')
 
 
-def _parse_date(value) -> Optional[date]:
-    if value is None:
-        return None
-    if isinstance(value, date) and not isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
-        return datetime.strptime(value, "%Y-%m-%d").date()
-    return None
+def _convert_field(obj, name, converter):
+    """Convert a field value using the given converter."""
+    value = getattr(obj, name)
+    if value is not None:
+        setattr(obj, name, converter(value))
 
 
-def _parse_datetime(value) -> Optional[datetime]:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
-        try:
-            return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            return datetime.strptime(value, "%Y-%m-%d")
-    return None
+def _post_init_common(obj, date_fields=None, datetime_fields=None, bool_fields=None):
+    """Common post_init processing for date/datetime/bool fields."""
+    for field in (date_fields or []):
+        _convert_field(obj, field, parse_date)
+    for field in (datetime_fields or []):
+        _convert_field(obj, field, parse_datetime)
+    for field in (bool_fields or []):
+        val = getattr(obj, field)
+        if isinstance(val, int):
+            setattr(obj, field, bool(val))
 
 
 @dataclass
@@ -63,21 +55,17 @@ class Person:
     created_at: Optional[datetime] = None
 
     def __post_init__(self):
-        self.created_at = _parse_datetime(self.created_at)
+        _post_init_common(self, datetime_fields=['created_at'])
 
     @property
     def full_name(self) -> str:
-        parts = [self.first_name]
-        if self.middle_name:
-            parts.append(self.middle_name)
-        parts.append(self.last_name)
+        parts = [self.first_name] + ([self.middle_name] if self.middle_name else []) + [self.last_name]
         return " ".join(parts)
 
     @property
     def display_name(self) -> str:
-        if self.middle_name:
-            return f"{self.last_name}, {self.first_name} {self.middle_name}"
-        return f"{self.last_name}, {self.first_name}"
+        mid = f" {self.middle_name}" if self.middle_name else ""
+        return f"{self.last_name}, {self.first_name}{mid}"
 
 
 @dataclass
@@ -93,9 +81,7 @@ class Case:
     created_at: Optional[datetime] = None
 
     def __post_init__(self):
-        self.created_at = _parse_datetime(self.created_at)
-        if isinstance(self.is_litigation, int):
-            self.is_litigation = bool(self.is_litigation)
+        _post_init_common(self, datetime_fields=['created_at'], bool_fields=['is_litigation'])
 
 
 @dataclass
@@ -110,9 +96,7 @@ class CasePerson:
     created_at: Optional[datetime] = None
 
     def __post_init__(self):
-        self.created_at = _parse_datetime(self.created_at)
-        if isinstance(self.is_pro_se, int):
-            self.is_pro_se = bool(self.is_pro_se)
+        _post_init_common(self, datetime_fields=['created_at'], bool_fields=['is_pro_se'])
 
 
 @dataclass
@@ -124,14 +108,11 @@ class BillingEntry:
     is_expense: bool = False
     amount_cents: Optional[int] = None
     description: str = ""
+    sort_order: int = 0
     created_at: Optional[datetime] = None
 
     def __post_init__(self):
-        self.entry_date = _parse_date(self.entry_date)
-        self.created_at = _parse_datetime(self.created_at)
-        if isinstance(self.is_expense, int):
-            self.is_expense = bool(self.is_expense)
-
+        _post_init_common(self, date_fields=['entry_date'], datetime_fields=['created_at'], bool_fields=['is_expense'])
 
 @dataclass
 class Payment:
@@ -147,9 +128,8 @@ class Payment:
     created_at: Optional[datetime] = None
 
     def __post_init__(self):
-        self.payment_date = _parse_date(self.payment_date)
-        self.created_at = _parse_datetime(self.created_at)
-    
+        _post_init_common(self, date_fields=['payment_date'], datetime_fields=['created_at'])
+
     @property
     def total_amount_cents(self) -> int:
         return self.amount_cents + self.expense_amount_cents

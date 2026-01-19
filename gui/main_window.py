@@ -55,7 +55,7 @@ class MainWindow(QMainWindow):
             self.person_queries,
             self.case_person_queries
         )
-        self.tab_widget.addTab(self.billing_widget, "Billing & Payments")
+        self.tab_widget.addTab(self.billing_widget, "Billing/Payments")
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready")

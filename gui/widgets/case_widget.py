@@ -1,15 +1,16 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QSplitter,
-    QTableWidget, QTableWidgetItem, QMessageBox, QLabel, QGroupBox
+    QTableWidget, QMessageBox, QLabel, QGroupBox
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QBrush
 from core.queries import CaseQueries, PersonQueries, CasePersonQueries, RecentCountyQueries
+from core.utils import format_matter_display
 from gui.dialogs.case_dialog import CaseDialog
 from gui.widgets.case_detail_widget import CaseDetailWidget
 from gui.widgets.styled_combo_box import StyledComboBox
 from gui.widgets.base_table_widget import configure_standard_table, get_selected_row_id, TooltipTableWidgetItem
-from gui.utils import show_table_context_menu
+from gui.utils import show_table_context_menu, load_combo_with_items
 
 
 class CaseWidget(QWidget):
@@ -123,31 +124,15 @@ class CaseWidget(QWidget):
             self.select_case(case_id)
 
     def load_matter_combo(self, cases: list):
-        self.matter_combo.blockSignals(True)
-        self.matter_combo.clear()
-        self.matter_combo.addItem("-- Select a Matter --", None)
-
-        for case_data in cases:
-            matter_name = case_data.get('case_name') or ''
-            case_id = case_data.get('id')
-            
-            if case_data.get('is_litigation'):
-                county = case_data.get('county') or ''
-                court_type = case_data.get('court_type') or ''
-                case_number = case_data.get('case_number') or ''
-                
-                court_display = f"{county} County {court_type}" if county and court_type else (court_type or county or 'Litigation')
-                
-                if case_number:
-                    display = f"{matter_name} - {court_display} ({case_number})"
-                else:
-                    display = f"{matter_name} - {court_display}"
-            else:
-                display = f"{matter_name} - Non-Litigation"
-            
-            self.matter_combo.addItem(display, case_id)
-
-        self.matter_combo.blockSignals(False)
+        def formatter(case_data):
+            display = format_matter_display(case_data)
+            return (display, case_data.get('id'))
+        load_combo_with_items(
+            self.matter_combo,
+            cases,
+            formatter,
+            "-- Select a Matter --"
+        )
 
     def on_combo_matter_selected(self, index):
         case_id = self.matter_combo.currentData()
@@ -218,13 +203,14 @@ class CaseWidget(QWidget):
         self.refresh()
 
     def refresh(self):
+        selected_id = self.get_selected_case_id()
+        
         cases = self.case_queries.get_all_with_client()
         self.populate_table(cases)
         self.load_matter_combo(cases)
 
-        selected_id = self.get_selected_case_id()
         if selected_id:
-            self.detail_widget.refresh()
+            self.select_case(selected_id)
 
     def select_case(self, case_id: int):
         for row in range(self.table.rowCount()):

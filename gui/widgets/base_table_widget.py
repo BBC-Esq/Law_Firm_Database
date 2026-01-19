@@ -4,6 +4,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from gui.utils import show_table_context_menu
+from typing import Callable, List, Dict, Any, Optional
 
 
 class TooltipTableWidgetItem(QTableWidgetItem):
@@ -12,10 +13,15 @@ class TooltipTableWidgetItem(QTableWidgetItem):
         self.setToolTip(text)
 
 
-def configure_standard_table(table: QTableWidget, headers: list, hide_id_column: bool = True):
+def configure_standard_table(table: QTableWidget, headers: list, 
+                             hide_id_column: bool = True,
+                             stretch_last: bool = False,
+                             resize_mode: QHeaderView.ResizeMode = QHeaderView.Stretch):
     table.setColumnCount(len(headers))
     table.setHorizontalHeaderLabels(headers)
-    table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+    table.horizontalHeader().setSectionResizeMode(resize_mode)
+    if stretch_last and len(headers) > 1:
+        table.horizontalHeader().setSectionResizeMode(len(headers) - 1, QHeaderView.Stretch)
     table.setSelectionBehavior(QTableWidget.SelectRows)
     table.setSelectionMode(QTableWidget.SingleSelection)
     table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -23,6 +29,22 @@ def configure_standard_table(table: QTableWidget, headers: list, hide_id_column:
         table.setColumnHidden(0, True)
     table.setSortingEnabled(True)
     table.setAlternatingRowColors(True)
+    table.setContextMenuPolicy(Qt.CustomContextMenu)
+
+
+def configure_billing_table(table: QTableWidget, headers: list):
+    """Configure a table for billing/payment entries with word wrap."""
+    table.setColumnCount(len(headers))
+    table.setHorizontalHeaderLabels(headers)
+    table.setColumnHidden(0, True)
+    table.setSelectionBehavior(QTableWidget.SelectRows)
+    table.setSelectionMode(QTableWidget.SingleSelection)
+    table.setEditTriggers(QTableWidget.NoEditTriggers)
+    table.setAlternatingRowColors(True)
+    table.setWordWrap(True)
+    table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+    table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+    table.horizontalHeader().setSectionResizeMode(len(headers) - 1, QHeaderView.Stretch)
     table.setContextMenuPolicy(Qt.CustomContextMenu)
 
 
@@ -36,7 +58,9 @@ def get_selected_row_id(table: QTableWidget, id_column: int = 0):
     return None
 
 
-def populate_table_rows(table: QTableWidget, data: list, row_formatter):
+def populate_table_rows(table: QTableWidget, data: list, row_formatter: Callable,
+                        alignments: Optional[Dict[int, int]] = None,
+                        row_styler: Optional[Callable] = None):
     table.setSortingEnabled(False)
     table.setRowCount(len(data))
     
@@ -44,7 +68,13 @@ def populate_table_rows(table: QTableWidget, data: list, row_formatter):
         values = row_formatter(item)
         for col, value in enumerate(values):
             text = str(value) if value is not None else ""
-            table.setItem(row, col, TooltipTableWidgetItem(text))
+            table_item = TooltipTableWidgetItem(text)
+            if alignments and col in alignments:
+                table_item.setTextAlignment(alignments[col])
+            table.setItem(row, col, table_item)
+        
+        if row_styler:
+            row_styler(table, row, item)
 
     table.setSortingEnabled(True)
 
@@ -68,26 +98,20 @@ class BaseTableWidget(QWidget):
 
     def create_button_row(self) -> QHBoxLayout:
         layout = QHBoxLayout()
-        
         self.add_btn = QPushButton(self.get_add_button_text())
         self.add_btn.clicked.connect(self.add_item)
         layout.addWidget(self.add_btn)
-
         layout.addStretch()
-
         self.refresh_btn = QPushButton("Refresh")
         self.refresh_btn.clicked.connect(self.refresh)
         layout.addWidget(self.refresh_btn)
-
         return layout
 
     def get_add_button_text(self) -> str:
         return "Add"
 
     def get_selected_id(self):
-        if self.table:
-            return get_selected_row_id(self.table)
-        return None
+        return get_selected_row_id(self.table) if self.table else None
 
     def populate_table(self, data: list):
         if self.table:
@@ -97,8 +121,7 @@ class BaseTableWidget(QWidget):
 
     def show_context_menu(self, position):
         show_table_context_menu(
-            self.table,
-            position,
+            self.table, position,
             edit_callback=self.edit_item,
             delete_callback=self.delete_item,
             extra_actions=self.get_extra_context_actions()
@@ -108,26 +131,25 @@ class BaseTableWidget(QWidget):
         return None
 
     def row_to_values(self, item) -> list:
-        raise NotImplementedError("Subclasses must implement row_to_values")
+        raise NotImplementedError
 
     def refresh(self):
-        raise NotImplementedError("Subclasses must implement refresh")
+        raise NotImplementedError
 
     def add_item(self):
-        raise NotImplementedError("Subclasses must implement add_item")
+        raise NotImplementedError
 
     def edit_item(self):
-        raise NotImplementedError("Subclasses must implement edit_item")
+        raise NotImplementedError
 
     def delete_item(self):
-        raise NotImplementedError("Subclasses must implement delete_item")
+        raise NotImplementedError
 
     def confirm_delete(self, message: str) -> bool:
-        reply = QMessageBox.question(
+        return QMessageBox.question(
             self, "Confirm Delete", message,
             QMessageBox.Yes | QMessageBox.No
-        )
-        return reply == QMessageBox.Yes
+        ) == QMessageBox.Yes
 
     def show_warning(self, message: str):
         QMessageBox.warning(self, "Warning", message)

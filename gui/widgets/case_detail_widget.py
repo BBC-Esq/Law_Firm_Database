@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal
 from core.queries import PersonQueries, CasePersonQueries, CaseQueries
-from core.models import ROLE_DISPLAY_NAMES
+from core.models import ROLE_DISPLAY_NAMES, PARTY_DESIGNATION_DISPLAY
 from gui.dialogs.add_person_to_case_dialog import AddPersonToCaseDialog
 from gui.dialogs.person_dialog import PersonDialog
 
@@ -35,7 +35,6 @@ class CompactPersonCard(QFrame):
 
         info_parts = []
         if self.person_data.get('party_designation'):
-            from core.models import PARTY_DESIGNATION_DISPLAY
             info_parts.append(PARTY_DESIGNATION_DISPLAY.get(self.person_data['party_designation'], ''))
         if self.person_data.get('firm_name'):
             info_parts.append(self.person_data['firm_name'])
@@ -309,12 +308,12 @@ class CaseDetailWidget(QWidget):
             "Change Judge"
         )
 
-        self.update_person_list_section(
+        self.update_container_with_cards(
             self.judge_staff_container,
             summary.get('judge_staff', [])
         )
 
-        self.update_person_list_section(
+        self.update_container_with_cards(
             self.court_staff_container,
             summary.get('court_staff', [])
         )
@@ -329,7 +328,7 @@ class CaseDetailWidget(QWidget):
             "Change GAL"
         )
 
-        self.update_person_list_section(
+        self.update_container_with_cards(
             self.co_counsel_container,
             summary.get('co_counsel', [])
         )
@@ -341,6 +340,20 @@ class CaseDetailWidget(QWidget):
                 item = layout.takeAt(0)
                 if item.widget():
                     item.widget().deleteLater()
+
+    def update_container_with_cards(self, container: QWidget, people: list,
+                                     show_remove: bool = True,
+                                     show_add_staff: bool = False):
+        self.clear_container(container)
+        layout = container.layout()
+
+        for person_data in people:
+            card = CompactPersonCard(person_data, show_remove, show_add_staff)
+            card.edit_clicked.connect(self.edit_person)
+            card.remove_clicked.connect(self.remove_person)
+            if show_add_staff:
+                card.add_staff_clicked.connect(self.on_add_opposing_staff)
+            layout.addWidget(card)
 
     def update_client_section(self, client_data: dict):
         self.clear_container(self.client_container)
@@ -364,16 +377,6 @@ class CaseDetailWidget(QWidget):
             button.setText(filled_text)
         else:
             button.setText(empty_text)
-
-    def update_person_list_section(self, container: QWidget, people: list):
-        self.clear_container(container)
-        layout = container.layout()
-
-        for person_data in people:
-            card = CompactPersonCard(person_data)
-            card.edit_clicked.connect(self.edit_person)
-            card.remove_clicked.connect(self.remove_person)
-            layout.addWidget(card)
 
     def update_opposing_section(self, opposing_parties: list):
         self.clear_container(self.opposing_container)
