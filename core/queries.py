@@ -13,7 +13,7 @@ CASE_COLUMNS = "id, case_number, case_name, is_litigation, court_type, county, s
 
 CASE_PERSON_COLUMNS = "id, case_id, person_id, role, party_designation, represents_person_id, is_pro_se, created_at"
 
-BILLING_COLUMNS = "id, case_id, entry_date, hours, is_expense, amount_cents, description, sort_order, created_at"
+BILLING_COLUMNS = "id, case_id, entry_date, hours, is_expense, amount_cents, description, created_at"
 
 PAYMENT_COLUMNS = "id, person_id, case_id, payment_date, amount_cents, expense_amount_cents, payment_method, reference_number, notes, created_at"
 
@@ -346,59 +346,39 @@ class BillingQueries(BaseQueries[BillingEntry]):
     table_name = "billing_entries"
     model_class = BillingEntry
     columns = BILLING_COLUMNS
-    order_by = "entry_date DESC, sort_order ASC"
-
-    def get_next_sort_order(self, case_id: int, entry_date) -> int:
-        row = self.db.fetchone("""
-            SELECT COALESCE(MAX(sort_order), -1) + 1 as next_order
-            FROM billing_entries
-            WHERE case_id = ? AND entry_date = ?
-        """, (case_id, entry_date))
-        return row["next_order"] if row else 0
+    order_by = "entry_date DESC"
 
     def create(self, entry: BillingEntry) -> int:
-        sort_order = self.get_next_sort_order(entry.case_id, entry.entry_date)
         cursor = self.db.execute("""
-            INSERT INTO billing_entries (case_id, entry_date, hours, is_expense, amount_cents, description, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO billing_entries (case_id, entry_date, hours, is_expense, amount_cents, description)
+            VALUES (?, ?, ?, ?, ?, ?)
         """, (
             entry.case_id, 
             entry.entry_date, 
             entry.hours, 
             1 if entry.is_expense else 0, 
             entry.amount_cents, 
-            entry.description,
-            sort_order
+            entry.description
         ))
         return cursor.lastrowid
 
     def create_from_dict(self, entry_data: dict) -> int:
-        case_id = entry_data['case_id']
-        entry_date = entry_data['entry_date']
-        sort_order = self.get_next_sort_order(case_id, entry_date)
         cursor = self.db.execute("""
-            INSERT INTO billing_entries (case_id, entry_date, hours, is_expense, amount_cents, description, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO billing_entries (case_id, entry_date, hours, is_expense, amount_cents, description)
+            VALUES (?, ?, ?, ?, ?, ?)
         """, (
-            case_id,
-            entry_date,
+            entry_data['case_id'],
+            entry_data['entry_date'],
             entry_data.get('hours'),
             entry_data.get('is_expense', 0),
             entry_data.get('amount_cents'),
-            entry_data.get('description', ''),
-            sort_order
+            entry_data.get('description', '')
         ))
         return cursor.lastrowid
 
     def update(self, entry: BillingEntry):
-        existing = self.get_by_id(entry.id)
-        if existing and existing.entry_date != entry.entry_date:
-            sort_order = self.get_next_sort_order(entry.case_id, entry.entry_date)
-        else:
-            sort_order = entry.sort_order
-            
         self.db.execute("""
-            UPDATE billing_entries SET case_id=?, entry_date=?, hours=?, is_expense=?, amount_cents=?, description=?, sort_order=?
+            UPDATE billing_entries SET case_id=?, entry_date=?, hours=?, is_expense=?, amount_cents=?, description=?
             WHERE id=?
         """, (
             entry.case_id, 
@@ -407,7 +387,6 @@ class BillingQueries(BaseQueries[BillingEntry]):
             1 if entry.is_expense else 0, 
             entry.amount_cents, 
             entry.description,
-            sort_order,
             entry.id
         ))
 
@@ -422,7 +401,7 @@ class BillingQueries(BaseQueries[BillingEntry]):
             LEFT JOIN case_people cp ON c.id = cp.case_id AND cp.role = 'client'
             LEFT JOIN people p ON cp.person_id = p.id
             WHERE be.case_id = ?
-            ORDER BY be.entry_date DESC, be.sort_order ASC
+            ORDER BY be.entry_date DESC
         """, (case_id,))
         return [dict(row) for row in rows]
 
@@ -436,76 +415,9 @@ class BillingQueries(BaseQueries[BillingEntry]):
             SELECT entry_date, hours, is_expense, amount_cents, description
             FROM billing_entries
             WHERE case_id = ? AND entry_date >= ? AND entry_date < ?
-            ORDER BY entry_date ASC, sort_order ASC
+            ORDER BY entry_date ASC
         """, (case_id, start_date, end_date))
         return [dict(row) for row in rows]
-
-    def get_entries_on_same_date(self, entry_id: int) -> List[dict]:
-        entry = self.get_by_id(entry_id)
-        if not entry:
-            return []
-        
-        rows = self.db.fetchall("""
-            SELECT id, sort_order
-            FROM billing_entries
-            WHERE case_id = ? AND entry_date = ?
-            ORDER BY sort_order ASC
-        """, (entry.case_id, entry.entry_date))
-        return [dict(row) for row in rows]
-
-    def move_entry_up(self, entry_id: int) -> bool:
-        entries = self.get_entries_on_same_date(entry_id)
-        if len(entries) < 2:
-            return False
-        
-        current_idx = None
-        for i, e in enumerate(entries):
-            if e['id'] == entry_id:
-                current_idx = i
-                break
-        
-        if current_idx is None or current_idx == 0:
-            return False
-        
-        prev_entry = entries[current_idx - 1]
-        curr_entry = entries[current_idx]
-        
-        self.db.execute(
-            "UPDATE billing_entries SET sort_order = ? WHERE id = ?",
-            (prev_entry['sort_order'], entry_id)
-        )
-        self.db.execute(
-            "UPDATE billing_entries SET sort_order = ? WHERE id = ?",
-            (curr_entry['sort_order'], prev_entry['id'])
-        )
-        return True
-
-    def move_entry_down(self, entry_id: int) -> bool:
-        entries = self.get_entries_on_same_date(entry_id)
-        if len(entries) < 2:
-            return False
-        
-        current_idx = None
-        for i, e in enumerate(entries):
-            if e['id'] == entry_id:
-                current_idx = i
-                break
-        
-        if current_idx is None or current_idx == len(entries) - 1:
-            return False
-        
-        next_entry = entries[current_idx + 1]
-        curr_entry = entries[current_idx]
-        
-        self.db.execute(
-            "UPDATE billing_entries SET sort_order = ? WHERE id = ?",
-            (next_entry['sort_order'], entry_id)
-        )
-        self.db.execute(
-            "UPDATE billing_entries SET sort_order = ? WHERE id = ?",
-            (curr_entry['sort_order'], next_entry['id'])
-        )
-        return True
 
     def get_case_totals(self, case_id: int) -> dict:
         row = self.db.fetchone("""

@@ -146,38 +146,12 @@ class MatterBillingWidget(QWidget):
             ("Duplicate with Today's Date", self.duplicate_billing_entry)
         ]
 
-        entries = self.billing_queries.get_entries_on_same_date(entry_id)
-        if len(entries) > 1:
-            current_idx = None
-            for i, e in enumerate(entries):
-                if e['id'] == entry_id:
-                    current_idx = i
-                    break
-
-            if current_idx is not None:
-                if current_idx > 0:
-                    extra_actions.append(("Move Up (within same date)", self.move_billing_entry_up))
-                if current_idx < len(entries) - 1:
-                    extra_actions.append(("Move Down (within same date)", self.move_billing_entry_down))
-
         show_table_context_menu(
             self.billing_table, position,
             edit_callback=self.edit_billing_entry,
             delete_callback=self.delete_billing_entry,
             extra_actions=extra_actions
         )
-
-    def move_billing_entry_up(self):
-        entry_id = self.get_selected_billing_id()
-        if entry_id:
-            if self.billing_queries.move_entry_up(entry_id):
-                self.load_billing_entries()
-
-    def move_billing_entry_down(self):
-        entry_id = self.get_selected_billing_id()
-        if entry_id:
-            if self.billing_queries.move_entry_down(entry_id):
-                self.load_billing_entries()
 
     def show_payment_context_menu(self, position):
         if not self.get_selected_payment_id():

@@ -139,6 +139,10 @@ class MainWindow(QMainWindow):
             widget.refresh()
 
     def closeEvent(self, event):
-        self.save_state()
-        self.db.close()
-        event.accept()
+        try:
+            self.save_state()
+        except Exception as e:
+            print(f"Warning: Failed to save state: {e}")
+        finally:
+            self.db.close()
+            event.accept()

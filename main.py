@@ -4,6 +4,8 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QTimer
+import concurrent.futures
 from gui.main_window import MainWindow
 
 
@@ -35,10 +37,21 @@ def main():
     app.setStyle("Fusion")
 
     db_path = os.path.join(get_app_path(), "law_billing.db")
-    auto_backup(db_path)
 
-    window = MainWindow(db_path=db_path)
-    window.show()
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(auto_backup, db_path)
+
+    def start_main_window_when_ready():
+        if not future.done():
+            QTimer.singleShot(50, start_main_window_when_ready)
+            return
+
+        executor.shutdown(wait=False)
+
+        window = MainWindow(db_path=db_path)
+        window.show()
+
+    QTimer.singleShot(0, start_main_window_when_ready)
     sys.exit(app.exec())
 
 

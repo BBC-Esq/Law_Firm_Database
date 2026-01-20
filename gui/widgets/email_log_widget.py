@@ -14,18 +14,8 @@ from PySide6.QtGui import QCursor, QDesktopServices
 from gui.dialogs.quick_billing_dialog import QuickBillingDialog
 from gui.widgets.date_filter_widget import DateFilterWidget
 
-try:
-    import pandas as pd
-    HAS_PANDAS = True
-except ImportError:
-    HAS_PANDAS = False
-
 
 class EmailLogWidget(QWidget):
-    COLUMNS = [
-        'file_path', 'email_datetime', 'email_date', 'sender', 'sender_normalized',
-        'recipients', 'recipients_normalized', 'cc', 'cc_normalized', 'subject', 'attachments'
-    ]
 
     def __init__(self, case_queries, billing_queries, app_settings=None):
         super().__init__()
@@ -33,9 +23,7 @@ class EmailLogWidget(QWidget):
         self.billing_queries = billing_queries
         self.app_settings = app_settings
         self._loading = False
-
-        if HAS_PANDAS:
-            self.df = pd.DataFrame(columns=self.COLUMNS)
+        self.records = []
 
         self.setup_ui()
         self.refresh_table()
@@ -285,28 +273,18 @@ class EmailLogWidget(QWidget):
                 if filename:
                     attachments_list.append(filename)
         attachments = "; ".join(attachments_list)
-        sender_normalized = self.normalize_email(sender)
-        recipients_normalized = self.normalize_email(recipients)
-        cc_normalized = self.normalize_email(cc)
         return {
             'file_path': os.path.abspath(file_path),
             'email_datetime': email_datetime,
             'email_date': email_date,
             'sender': sender,
-            'sender_normalized': sender_normalized,
             'recipients': recipients,
-            'recipients_normalized': recipients_normalized,
             'cc': cc,
-            'cc_normalized': cc_normalized,
             'subject': subject,
             'attachments': attachments
         }
 
     def load_eml_files(self):
-        if not HAS_PANDAS:
-            QMessageBox.warning(self, "Missing Dependency", "pandas is required for Email Log functionality.\nInstall with: pip install pandas")
-            return
-
         file_paths, _ = QFileDialog.getOpenFileNames(self, "Open EML Files", "", "EML Files (*.eml)")
         if not file_paths:
             return
@@ -319,12 +297,9 @@ class EmailLogWidget(QWidget):
             failed_files = []
 
             existing_keys = set()
-            if not self.df.empty:
-                existing_keys = set(
-                    self.df['email_datetime'].astype(str) + '|' + self.df['sender'].astype(str) + '|' + self.df['subject'].astype(str)
-                )
-
-            all_new_records = []
+            for record in self.records:
+                key = f"{record['email_datetime']}|{record['sender']}|{record['subject']}"
+                existing_keys.add(key)
 
             for file_path in file_paths:
                 try:
@@ -335,18 +310,10 @@ class EmailLogWidget(QWidget):
                             total_duplicates += 1
                         else:
                             existing_keys.add(key)
-                            all_new_records.append(record)
+                            self.records.append(record)
                             total_loaded += 1
-
                 except Exception as e:
                     failed_files.append(f"{os.path.basename(file_path)}: {str(e)}")
-
-            if all_new_records:
-                new_df = pd.DataFrame(all_new_records)
-                if self.df.empty:
-                    self.df = new_df
-                else:
-                    self.df = pd.concat([self.df, new_df], ignore_index=True)
 
         finally:
             self._loading = False
@@ -360,46 +327,40 @@ class EmailLogWidget(QWidget):
         else:
             QMessageBox.information(self, "Import Complete", message)
 
-    def _update_status(self, filtered_count: int, total_count: int):
-        self.status_label.setText(f"Records: {filtered_count} (Total loaded: {total_count})")
+    def _filter_and_sort(self):
+        filtered = self.records.copy()
+
+        if self.date_filter.is_enabled():
+            start, end = self.date_filter.get_range()
+            filtered = [r for r in filtered if start <= r['email_date'] <= end]
+
+        sort_option = self.sort_combo.currentIndex()
+        if sort_option == 0:
+            filtered.sort(key=lambda r: r['email_datetime'], reverse=True)
+        elif sort_option == 1:
+            filtered.sort(key=lambda r: r['email_datetime'])
+        elif sort_option == 2:
+            filtered.sort(key=lambda r: (r['sender'].lower(), r['email_datetime']), reverse=False)
+        else:
+            filtered.sort(key=lambda r: (r['subject'].lower(), r['email_datetime']), reverse=False)
+
+        return filtered
 
     def refresh_table(self):
         if self._loading:
             return
 
-        if not HAS_PANDAS:
-            self.table.setRowCount(0)
-            self.status_label.setText("pandas not installed")
-            return
-
-        if self.df.empty:
+        if not self.records:
             self.table.setRowCount(0)
             self.status_label.setText("Records: 0")
             self.email_viewer.clear()
             return
 
         try:
-            filtered_df = self.df.copy()
+            filtered = self._filter_and_sort()
 
-            if self.date_filter.is_enabled():
-                start, end = self.date_filter.get_range()
-                mask = (filtered_df['email_date'] >= start) & (filtered_df['email_date'] <= end)
-                filtered_df = filtered_df[mask]
-
-            sort_option = self.sort_combo.currentIndex()
-            if sort_option == 0:
-                filtered_df = filtered_df.sort_values('email_datetime', ascending=False)
-            elif sort_option == 1:
-                filtered_df = filtered_df.sort_values('email_datetime', ascending=True)
-            elif sort_option == 2:
-                filtered_df = filtered_df.sort_values(['sender', 'email_datetime'], ascending=[True, False])
-            else:
-                filtered_df = filtered_df.sort_values(['subject', 'email_datetime'], ascending=[True, False])
-
-            filtered_df = filtered_df.reset_index(drop=True)
-
-            self.table.setRowCount(len(filtered_df))
-            for row_idx, row in filtered_df.iterrows():
+            self.table.setRowCount(len(filtered))
+            for row_idx, row in enumerate(filtered):
                 try:
                     dt = datetime.strptime(str(row['email_datetime']), "%Y-%m-%d %H:%M:%S")
                     display_dt = dt.strftime("%m/%d/%Y %I:%M %p")
@@ -407,14 +368,14 @@ class EmailLogWidget(QWidget):
                     display_dt = str(row['email_datetime'])
 
                 self.table.setItem(row_idx, 0, QTableWidgetItem(display_dt))
-                self.table.setItem(row_idx, 1, QTableWidgetItem(str(row['sender'] or "")))
-                self.table.setItem(row_idx, 2, QTableWidgetItem(str(row['recipients'] or "")))
-                self.table.setItem(row_idx, 3, QTableWidgetItem(str(row['cc'] or "")))
-                self.table.setItem(row_idx, 4, QTableWidgetItem(str(row['subject'] or "")))
-                self.table.setItem(row_idx, 5, QTableWidgetItem(str(row['attachments'] or "")))
-                self.table.setItem(row_idx, 6, QTableWidgetItem(str(row['file_path'] or "")))
+                self.table.setItem(row_idx, 1, QTableWidgetItem(row.get('sender') or ""))
+                self.table.setItem(row_idx, 2, QTableWidgetItem(row.get('recipients') or ""))
+                self.table.setItem(row_idx, 3, QTableWidgetItem(row.get('cc') or ""))
+                self.table.setItem(row_idx, 4, QTableWidgetItem(row.get('subject') or ""))
+                self.table.setItem(row_idx, 5, QTableWidgetItem(row.get('attachments') or ""))
+                self.table.setItem(row_idx, 6, QTableWidgetItem(row.get('file_path') or ""))
 
-            self._update_status(len(filtered_df), len(self.df))
+            self.status_label.setText(f"Records: {len(filtered)} (Total loaded: {len(self.records)})")
             self.email_viewer.clear()
 
         except Exception as e:
@@ -427,8 +388,7 @@ class EmailLogWidget(QWidget):
             QMessageBox.Yes | QMessageBox.No
         )
         if reply == QMessageBox.Yes:
-            if HAS_PANDAS:
-                self.df = pd.DataFrame(columns=self.COLUMNS)
+            self.records = []
             self.refresh_table()
 
     def refresh(self):

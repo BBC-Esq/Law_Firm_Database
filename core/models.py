@@ -122,7 +122,6 @@ class BillingEntry:
     is_expense: bool = False
     amount_cents: Optional[int] = None
     description: str = ""
-    sort_order: int = 0
     created_at: Optional[datetime] = None
 
     def __post_init__(self):
